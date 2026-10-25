@@ -60,6 +60,32 @@ The official TradeSkillMaster desktop application only ships for Windows and mac
 Pre-built packages for x86_64 are attached to every [release](https://github.com/marcomaiermm/tradewind/releases/latest).
 
 <details>
+<summary><b>Arch Linux / Manjaro / EndeavourOS</b></summary>
+
+Tradewind has its own signed pacman repository. Trust its signing key once:
+
+```bash
+curl -O https://raw.githubusercontent.com/marcomaiermm/tradewind/main/packaging/arch/tradewind.asc
+sudo pacman-key --add tradewind.asc
+sudo pacman-key --lsign-key 6A4F7C1A0DD77827FB663CBBF8A74A1AE16AF11C
+```
+
+Add the repository to the end of `/etc/pacman.conf`:
+
+```ini
+[tradewind]
+Server = https://github.com/marcomaiermm/tradewind/releases/latest/download
+```
+
+Then install it. Updates come with every `pacman -Syu`.
+
+```bash
+sudo pacman -Syu tradewind
+```
+
+</details>
+
+<details>
 <summary><b>Debian / Ubuntu / Linux Mint / Pop!_OS</b></summary>
 
 ```bash

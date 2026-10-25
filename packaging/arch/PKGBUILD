@@ -1,0 +1,21 @@
+# Maintainer: Marco Maier <marcomaiermm@users.noreply.github.com>
+pkgname=tradewind
+pkgver=0.1.0 # x-release-please-version
+pkgrel=1
+pkgdesc='Native Linux companion for TradeSkillMaster (World of Warcraft)'
+arch=('x86_64')
+url='https://github.com/marcomaiermm/tradewind'
+license=('MIT OR Apache-2.0')
+depends=('gcc-libs' 'glibc' 'hicolor-icon-theme' 'libarchive' 'openssl' 'zip')
+optdepends=('xdg-desktop-portal: folder and save dialogs'
+            'kdialog: fallback dialogs without a portal'
+            'libsecret: remember the sign-in in the Secret Service keyring'
+            'libnotify: desktop notifications'
+            'xdg-utils: open links in the browser')
+options=('!strip' '!debug')
+source=("$url/releases/download/v$pkgver/tradewind-$pkgver-x86_64-linux.tar.gz")
+sha256sums=('SKIP')
+
+package() {
+  cp -a usr "$pkgdir/"
+}
