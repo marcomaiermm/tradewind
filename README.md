@@ -57,6 +57,16 @@ The official TradeSkillMaster desktop application only ships for Windows and mac
 
 ## Installation
 
+The install script picks the right package for your system: the pacman repository on Arch-based distributions, the .deb on Debian and Ubuntu, the .rpm on Fedora and openSUSE, and the AppImage everywhere else, including Steam Deck and Fedora Atomic.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/marcomaiermm/tradewind/main/packaging/install.sh | sh
+```
+
+Your package manager asks before it installs Tradewind. On Arch-based systems the script first trusts the Tradewind signing key and adds the repository. Run the script again to update. You can [read it](packaging/install.sh) first.
+
+### Manual installation
+
 Pre-built packages for x86_64 are attached to every [release](https://github.com/marcomaiermm/tradewind/releases/latest).
 
 <details>
@@ -65,7 +75,7 @@ Pre-built packages for x86_64 are attached to every [release](https://github.com
 Tradewind has its own signed pacman repository. Trust its signing key once:
 
 ```bash
-curl -O https://raw.githubusercontent.com/marcomaiermm/tradewind/main/packaging/arch/tradewind.asc
+curl -fO https://raw.githubusercontent.com/marcomaiermm/tradewind/main/packaging/arch/tradewind.asc
 sudo pacman-key --add tradewind.asc
 sudo pacman-key --lsign-key 6A4F7C1A0DD77827FB663CBBF8A74A1AE16AF11C
 ```
@@ -89,7 +99,8 @@ sudo pacman -Syu tradewind
 <summary><b>Debian / Ubuntu / Linux Mint / Pop!_OS</b></summary>
 
 ```bash
-sudo apt install ./tradewind_*_amd64.deb
+curl -fLO https://github.com/marcomaiermm/tradewind/releases/latest/download/tradewind_amd64.deb
+sudo apt install ./tradewind_amd64.deb
 ```
 
 </details>
@@ -98,8 +109,8 @@ sudo apt install ./tradewind_*_amd64.deb
 <summary><b>Fedora / openSUSE / RHEL-compatible</b></summary>
 
 ```bash
-sudo dnf install ./tradewind-*.x86_64.rpm      # Fedora
-sudo zypper install ./tradewind-*.x86_64.rpm   # openSUSE
+sudo dnf install https://github.com/marcomaiermm/tradewind/releases/latest/download/tradewind.x86_64.rpm      # Fedora
+sudo zypper install https://github.com/marcomaiermm/tradewind/releases/latest/download/tradewind.x86_64.rpm   # openSUSE
 ```
 
 </details>
@@ -108,8 +119,9 @@ sudo zypper install ./tradewind-*.x86_64.rpm   # openSUSE
 <summary><b>Any distribution (AppImage)</b></summary>
 
 ```bash
-chmod +x tradewind-*-x86_64.AppImage
-./tradewind-*-x86_64.AppImage
+curl -fLO https://github.com/marcomaiermm/tradewind/releases/latest/download/tradewind-x86_64.AppImage
+chmod +x tradewind-x86_64.AppImage
+./tradewind-x86_64.AppImage
 ```
 
 Install `bsdtar` (libarchive) and `zip` from your distribution for backups and addon updates.
@@ -120,7 +132,7 @@ Install `bsdtar` (libarchive) and `zip` from your distribution for backups and a
 <summary><b>Tarball</b></summary>
 
 ```bash
-tar -xzf tradewind-*-x86_64-linux.tar.gz
+curl -fL https://github.com/marcomaiermm/tradewind/releases/latest/download/tradewind-x86_64-linux.tar.gz | tar -xz
 ./usr/bin/tradewind
 ```
 

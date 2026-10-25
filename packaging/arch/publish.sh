@@ -6,6 +6,9 @@ set -eu
 cd "$(dirname -- "$0")"
 
 printf '%s\n' "$SIGNING_KEY" | gpg --batch --import
+# The release is still a draft, so fetch the tarball through the API.
+gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+    --pattern tradewind-x86_64-linux.tar.gz --output "tradewind-${TAG#v}.tar.gz"
 useradd --create-home builder
 chown -R builder .
 runuser -u builder -- makepkg --nodeps

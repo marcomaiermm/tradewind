@@ -13,7 +13,7 @@ optdepends=('xdg-desktop-portal: folder and save dialogs'
             'libnotify: desktop notifications'
             'xdg-utils: open links in the browser')
 options=('!strip' '!debug')
-source=("$url/releases/download/v$pkgver/tradewind-$pkgver-x86_64-linux.tar.gz")
+source=("$pkgname-$pkgver.tar.gz::$url/releases/download/v$pkgver/tradewind-x86_64-linux.tar.gz")
 sha256sums=('SKIP')
 
 package() {

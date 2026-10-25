@@ -25,7 +25,7 @@ body:
     id: install
     attributes:
       label: Installed via
-      options: [.deb, .rpm, AppImage, Tarball, Built from source]
+      options: [pacman repo, .deb, .rpm, AppImage, Tarball, Built from source]
     validations:
       required: true
   - type: input
