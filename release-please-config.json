@@ -8,13 +8,7 @@
       "bump-minor-pre-major": true,
       "bump-patch-for-minor-pre-major": true,
       "draft": true,
-      "force-tag-creation": true,
-      "extra-files": [
-        {
-          "type": "generic",
-          "path": "packaging/arch/PKGBUILD"
-        }
-      ]
+      "force-tag-creation": true
     }
   }
 }

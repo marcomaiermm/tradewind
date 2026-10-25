@@ -1,5 +1,6 @@
 #!/bin/sh
-# Build release artifacts into dist/: tarball, .deb, .rpm, AppImage and SHA256SUMS.
+# Build release artifacts into dist/: tarball, .deb, .rpm, Arch package, AppImage
+# and SHA256SUMS.
 # Requires cargo, nfpm and linuxdeploy on PATH. CI runs this on the oldest
 # supported glibc (Ubuntu 22.04) so the binary runs on current distributions.
 set -eu
@@ -16,6 +17,8 @@ DESTDIR="$PWD/dist/stage" tools/install.sh /usr
 tar -C dist/stage -czf "dist/tradewind-$arch-linux.tar.gz" usr
 VERSION=$version nfpm package --config packaging/nfpm.yaml --packager deb --target dist/tradewind_amd64.deb
 VERSION=$version nfpm package --config packaging/nfpm.yaml --packager rpm --target "dist/tradewind.$arch.rpm"
+# pacman needs the version in the file name.
+VERSION=$version nfpm package --config packaging/nfpm.yaml --packager archlinux --target dist/
 
 # linuxdeploy wants the icon named like the desktop entry's Icon= key.
 cp data/icons/app/icon-256.png dist/tradewind.png
