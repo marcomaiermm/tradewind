@@ -41,7 +41,13 @@ jobs:
         with:
           toolchain: stable
       - uses: ./.github/actions/packaging-tools
-      - run: packaging/release.sh "${{ needs.release-please.outputs.version }}"
+      - name: Build packages
+        env:
+          SIGNING_KEY: ${{ secrets.PACMAN_SIGNING_KEY }}
+          RPM_SIGNING_KEY_FILE: ${{ runner.temp }}/signing-key.asc
+        run: |
+          printf '%s\n' "$SIGNING_KEY" > "$RPM_SIGNING_KEY_FILE"
+          packaging/release.sh "${{ needs.release-please.outputs.version }}"
       - name: Upload release assets
         env:
           GH_TOKEN: ${{ github.token }}

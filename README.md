@@ -63,7 +63,7 @@ The install script picks the right package for your system: the pacman repositor
 curl -fsSL https://raw.githubusercontent.com/marcomaiermm/tradewind/main/packaging/install.sh | sh
 ```
 
-Your package manager asks before it installs Tradewind. On Arch-based systems the script first trusts the Tradewind signing key and adds the repository. Run the script again to update. You can [read it](packaging/install.sh) first.
+Your package manager asks before it installs Tradewind. On Arch, Fedora and openSUSE the script first trusts the Tradewind signing key. On Arch it also adds the repository. Run the script again to update. You can [read it](packaging/install.sh) first.
 
 ### Manual installation
 
@@ -108,9 +108,17 @@ sudo apt install ./tradewind_amd64.deb
 <details>
 <summary><b>Fedora / openSUSE / RHEL-compatible</b></summary>
 
+The package is signed. Trust the signing key once:
+
 ```bash
-sudo dnf install https://github.com/marcomaiermm/tradewind/releases/latest/download/tradewind.x86_64.rpm      # Fedora
-sudo zypper install https://github.com/marcomaiermm/tradewind/releases/latest/download/tradewind.x86_64.rpm   # openSUSE
+sudo rpm --import https://raw.githubusercontent.com/marcomaiermm/tradewind/main/packaging/arch/tradewind.asc
+```
+
+Then install it:
+
+```bash
+sudo dnf install --setopt=localpkg_gpgcheck=1 https://github.com/marcomaiermm/tradewind/releases/latest/download/tradewind.x86_64.rpm   # Fedora
+sudo zypper install https://github.com/marcomaiermm/tradewind/releases/latest/download/tradewind.x86_64.rpm                             # openSUSE
 ```
 
 </details>

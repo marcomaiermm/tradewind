@@ -61,3 +61,8 @@ overrides:
 
 archlinux:
   packager: Marco Maier <marcomaiermm@users.noreply.github.com>
+
+# CI sets the key file. Without it the rpm is unsigned.
+rpm:
+  signature:
+    key_file: ${RPM_SIGNING_KEY_FILE}

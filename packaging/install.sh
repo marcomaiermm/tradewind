@@ -32,6 +32,13 @@ pacman_repo() {
     say "Done. Updates come with every pacman -Syu."
 }
 
+rpm_package() {
+    say "Trusting the Tradewind signing key"
+    curl -fsSL -o "$tmp/tradewind.asc" "$key"
+    as_root rpm --import "$tmp/tradewind.asc"
+    ask "$@" "$latest/tradewind.x86_64.rpm"
+}
+
 appimage() {
     say "Installing the AppImage to ~/.local/bin/tradewind"
     mkdir -p "$HOME/.local/bin"
@@ -70,10 +77,11 @@ main() {
         ask apt-get install "$tmp/tradewind_amd64.deb"
         ;;
     *" fedora "* | *" rhel "*)
-        ask dnf install "$latest/tradewind.x86_64.rpm"
+        # dnf skips the signature check for packages from a URL by default.
+        rpm_package dnf install --setopt=localpkg_gpgcheck=1
         ;;
     *" suse "*)
-        ask zypper install --allow-unsigned-rpm "$latest/tradewind.x86_64.rpm"
+        rpm_package zypper install
         ;;
     *)
         appimage
