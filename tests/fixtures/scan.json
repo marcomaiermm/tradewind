@@ -1,0 +1,5 @@
+{
+  "f@Alliance - Test Realm@internalData@csvAuctionDBScan": "itemString,minBuyout,marketValue,numAuctions,quantity,lastScan\ni:42,100.9,120.8,2,3,1699999999\ni:43,200,220,4,5,1700000000\ni:44:1,300,320,6,7,1699999999",
+  "f@Alliance - Test Realm@internalData@auctionDBScanTime": 1700000000,
+  "f@Alliance - Test Realm@internalData@auctionDBScanHash": 7674365
+}

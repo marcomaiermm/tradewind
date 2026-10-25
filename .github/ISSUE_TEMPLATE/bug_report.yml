@@ -1,0 +1,48 @@
+name: Bug report
+description: Something doesn't work as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please don't paste passwords, tokens or account names. The activity log is in `~/.local/share/tradewind/`.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Tradewind version
+      description: Output of `tradewind --version`, or the version line at the bottom of Settings
+      placeholder: tradewind 0.1.0 (c930f97d)
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: Installed via
+      options: [.deb, .rpm, AppImage, Tarball, Built from source]
+    validations:
+      required: true
+  - type: input
+    id: distro
+    attributes:
+      label: Distribution and desktop
+      placeholder: Arch Linux, KDE Plasma 6 (Wayland)
+    validations:
+      required: true
+  - type: dropdown
+    id: game
+    attributes:
+      label: Game version(s)
+      multiple: true
+      options: [Retail, MoP Classic (Progression), Classic Era, Anniversary, WoW Forever]
+  - type: textarea
+    id: log
+    attributes:
+      label: Relevant activity log lines
+      render: text

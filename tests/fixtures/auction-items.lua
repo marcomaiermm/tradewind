@@ -1,0 +1,1 @@
+TSMItemInfoDB = {versionStr="19,enUS,2.5.6,69795",itemStrings={"i:2770\002i:123\002p:42"},names={"Copper Ore\002Test Sword\002Test Pet"},data="_________________H_B_____________________C_D_____________________R_D____"}

@@ -1,0 +1,14 @@
+{
+  "success": true,
+  "data": {
+    "abc_ACCOUNT-Anniversary": [
+      {
+        "timestamp": 1700000000,
+        "keep": true
+      }
+    ]
+  },
+  "missing": [
+    "abc_ACCOUNT-Anniversary_1700000000"
+  ]
+}

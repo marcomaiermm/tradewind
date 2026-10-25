@@ -1,0 +1,2 @@
+# Keep the accounting wire fixture byte-exact, including its CRLF terminators.
+tests/fixtures/accounting-sales.csv -text whitespace=trailing-space,space-before-tab,cr-at-eol

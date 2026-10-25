@@ -1,0 +1,45 @@
+# .deb and .rpm packages, built by packaging/release.sh from the staged /usr tree.
+name: tradewind
+arch: amd64
+platform: linux
+version: ${VERSION}
+version_schema: semver
+section: games
+priority: optional
+maintainer: Marco Maier <marcomaiermm@users.noreply.github.com>
+description: |
+  Native Linux companion for TradeSkillMaster (World of Warcraft).
+  Price data sync, addon updates, local and cloud backups, accounting
+  exports and an offline auction house browser. Unofficial; not affiliated
+  with TradeSkillMaster or Blizzard Entertainment.
+vendor: tradewind
+homepage: https://github.com/marcomaiermm/tradewind
+license: MIT OR Apache-2.0
+
+contents:
+  - src: ./dist/stage/usr/
+    dst: /usr
+    type: tree
+
+overrides:
+  deb:
+    depends:
+      - libssl3 | libssl3t64
+      - libarchive-tools
+      - zip
+    recommends:
+      - xdg-desktop-portal
+      - libsecret-tools
+      - libnotify-bin
+      - xdg-utils
+  rpm:
+    depends:
+      # Soname dependency works across Fedora, openSUSE and RHEL clones.
+      - libssl.so.3()(64bit)
+      - bsdtar
+      - zip
+    recommends:
+      - xdg-desktop-portal
+      - libsecret
+      - libnotify
+      - xdg-utils

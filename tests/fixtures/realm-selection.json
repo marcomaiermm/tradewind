@@ -1,0 +1,9 @@
+[
+  {"game":"bcc","id":"eu-pyre-a","region":"EU","name":"Pyrewood Village-Alliance"},
+  {"game":"bcc","id":"eu-pyre-h","region":"EU","name":"Pyrewood Village-Horde"},
+  {"game":"bcc","id":"us-pyre-a","region":"US","name":"Pyrewood Village-Alliance"},
+  {"game":"retail","id":"eu-retail-pyre","region":"EU","name":"Pyrewood Village"},
+  {"game":"retail","id":"us-retail-pyre","region":"US","name":"Pyrewood Village"},
+  {"game":"bcc","id":"eu-unclassified","region":"EU","name":"Étoile-du-matin"},
+  {"game":"retail","id":"eu-horde-in-name","region":"EU","name":"Test-Horde"}
+]

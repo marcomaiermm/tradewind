@@ -1,0 +1,22 @@
+name: Packaging tools
+description: Install build dependencies, nfpm and linuxdeploy for packaging/release.sh
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      # Pinned releases with their GitHub-published digests. Bump both together.
+      env:
+        NFPM_VERSION: 2.48.0
+        NFPM_SHA256: 787af76e172dd5fc7cedf4d7c5a090a2f62be9001557a4db1103e270f90ddefd
+        LINUXDEPLOY_VERSION: 1-alpha-20251107-1
+        LINUXDEPLOY_SHA256: c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends libssl-dev pkg-config file
+        curl -fsSLo /tmp/nfpm.deb "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_amd64.deb"
+        curl -fsSLo /tmp/linuxdeploy "https://github.com/linuxdeploy/linuxdeploy/releases/download/${LINUXDEPLOY_VERSION}/linuxdeploy-x86_64.AppImage"
+        printf '%s  %s\n' "$NFPM_SHA256" /tmp/nfpm.deb "$LINUXDEPLOY_SHA256" /tmp/linuxdeploy | sha256sum -c -
+        sudo dpkg -i /tmp/nfpm.deb
+        sudo install -m 755 /tmp/linuxdeploy /usr/local/bin/linuxdeploy
+        # Runners have no FUSE, so AppImages extract themselves instead.
+        echo APPIMAGE_EXTRACT_AND_RUN=1 >> "$GITHUB_ENV"

@@ -1,0 +1,11 @@
+{
+  "items": {
+    "42": {
+      "min_buyout": 100,
+      "market_value": 120,
+      "num_auctions": 2,
+      "quantity": 3
+    }
+  },
+  "last_modified": 1700000000
+}

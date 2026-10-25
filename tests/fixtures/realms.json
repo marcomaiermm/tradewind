@@ -1,0 +1,17 @@
+{
+  "success": true,
+  "retail": [
+    {
+      "id": 42,
+      "name": "Test Realm",
+      "region": "EU"
+    }
+  ],
+  "bcc": [
+    {
+      "id": "43",
+      "name": "Other Realm",
+      "region": "EU"
+    }
+  ]
+}

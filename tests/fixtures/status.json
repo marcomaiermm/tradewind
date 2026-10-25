@@ -1,0 +1,88 @@
+{
+  "success": true,
+  "channels": {
+    "release": "Release",
+    "beta": "Beta"
+  },
+  "addons": [
+    {
+      "name": "TradeSkillMaster",
+      "version_str": "4.14.2"
+    },
+    {
+      "name": "TradeSkillMaster_AppHelper",
+      "version_str": "4.14.2"
+    }
+  ],
+  "realms": [
+    {
+      "name": "Test Realm",
+      "region": "EU",
+      "ahId": 42,
+      "appDataStrings": {
+        "AUCTIONDB_NON_COMMODITY_DATA": {
+          "lastModified": 1700000000,
+          "url": "https://data.tradeskillmaster.com/fixture_gzip.txt"
+        }
+      }
+    }
+  ],
+  "regions": [
+    {
+      "name": "EU",
+      "appDataStrings": {}
+    }
+  ],
+  "realms-Progression": [
+    {
+      "name": "Test Realm",
+      "region": "EU",
+      "ahId": 42,
+      "appDataStrings": {
+        "AUCTIONDB_NON_COMMODITY_DATA": {
+          "lastModified": 1700000000,
+          "url": "https://data.tradeskillmaster.com/fixture_gzip.txt"
+        }
+      }
+    }
+  ],
+  "regions-Progression": [],
+  "extraClassicRealms": [
+    {
+      "name": "Test Realm-Alliance",
+      "region": "Classic-EU",
+      "ahId": 42,
+      "appDataStrings": {
+        "AUCTIONDB_NON_COMMODITY_DATA": {
+          "lastModified": 1700000000,
+          "url": "https://data.tradeskillmaster.com/fixture_gzip.txt"
+        }
+      }
+    }
+  ],
+  "extraClassicRegions": [
+    {
+      "name": "Classic-EU",
+      "appDataStrings": {}
+    }
+  ],
+  "extraAnniversaryRealms": [
+    {
+      "name": "Test Realm-Alliance",
+      "region": "Anniversary-EU",
+      "ahId": 42,
+      "appDataStrings": {
+        "AUCTIONDB_NON_COMMODITY_DATA": {
+          "lastModified": 1700000000,
+          "url": "https://data.tradeskillmaster.com/fixture_gzip.txt"
+        }
+      }
+    }
+  ],
+  "extraAnniversaryRegions": [
+    {
+      "name": "Anniversary-EU",
+      "appDataStrings": {}
+    }
+  ]
+}

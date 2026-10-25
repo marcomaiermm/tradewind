@@ -1,0 +1,4 @@
+itemString,itemName,price,stackSize,quantity,time,source,buyer
+i:42,"Test, Item",100,1,2,90,Auction,Buyer
+i:43,'=Formula,200,1,1,91,Auction,Other
+i:44,Vendor Item,300,1,1,92,Vendor,NPC

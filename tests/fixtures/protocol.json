@@ -1,0 +1,13 @@
+{
+  "version": 41402,
+  "time": 1700000000,
+  "signature": "ea86bf52b7be5e219b7985e645db45e01db8cbd6139e330fb107842d2528442f",
+  "realm": "Realm \u00fc",
+  "encodedRealm": "UmVhbG0gw7w=",
+  "legacyApiUrl": "http://app-server.tradeskillmaster.com/v2/auth",
+  "oauthUrl": "https://id.tradeskillmaster.com/realms/app/protocol/openid-connect/token",
+  "cdnPriceUrl": "http://app-cdn.tradeskillmaster.xyz/fixture_gzip.txt?signature=fixture-only",
+  "authBody": {
+    "token": "fixture-access-token"
+  }
+}

@@ -1,0 +1,11 @@
+/target/
+/dist/
+.env
+.env.*
+!.env.example
+*.log
+*.tmp
+*.swp
+*~
+__pycache__/
+*.pyc

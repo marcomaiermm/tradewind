@@ -1,0 +1,11 @@
+pub(crate) mod archives;
+pub(crate) mod auction;
+pub(crate) mod desktop;
+pub(crate) mod files;
+pub(crate) mod icons;
+pub(crate) mod keyring;
+pub(crate) mod launcher;
+pub(crate) mod lua;
+pub(crate) mod tsm;
+pub(crate) mod uploads;
+pub(crate) mod wow;

@@ -1,0 +1,7 @@
+select(2, ...).LoadData("AUCTIONDB_NON_COMMODITY_DATA","Silvermoon",[=[return {downloadTime=1700000010,fields={"itemString","minBuyout","numAuctions","marketValueRecent"},data={{100,C1P,K,EKO}}}]=]) --<AUCTIONDB_NON_COMMODITY_DATA,Silvermoon,1700000010>
+select(2, ...).LoadData("AUCTIONDB_NON_COMMODITY_SCAN_STAT","Silvermoon",[=[return {downloadTime=1700000000,fields={"itemString","marketValue"},data={{100,FK0}}}]=]) --<AUCTIONDB_NON_COMMODITY_SCAN_STAT,Silvermoon,1700000000>
+select(2, ...).LoadData("AUCTIONDB_REGION_STAT","EU",[=[return {downloadTime=1699900000,fields={"itemString","regionMarketValue"},data={{100,GJ8},{200,HIG}}}]=]) --<AUCTIONDB_REGION_STAT,EU,1699900000>
+select(2, ...).LoadData("AUCTIONDB_REGION_STAT","US",[=[return {downloadTime=1699800000,fields={"itemString","regionMarketValue"},data={{100,31KV},{200,2MPO}}}]=]) --<AUCTIONDB_REGION_STAT,US,1699800000>
+select(2, ...).LoadData("AUCTIONDB_COMMODITY_DATA","EU",[=[return {downloadTime=1700000020,fields={"itemString","minBuyout","numAuctions","marketValueRecent"},data={{200,7Q,34,7V}}}]=]) --<AUCTIONDB_COMMODITY_DATA,EU,1700000020>
+select(2, ...).LoadData("AUCTIONDB_COMMODITY_DATA","US",[=[return {downloadTime=1700000030,fields={"itemString","minBuyout","numAuctions","marketValueRecent"},data={{200,9OF,1,9OF}}}]=]) --<AUCTIONDB_COMMODITY_DATA,US,1700000030>
+select(2, ...).LoadData("AUCTIONDB_REGION_SALE","EU",[=[return {downloadTime=1699900000,fields={"itemString","regionSale","regionSoldPerDay","regionSalePercent"},data={{100,9OG,172,3T}}}]=]) --<AUCTIONDB_REGION_SALE,EU,1699900000>

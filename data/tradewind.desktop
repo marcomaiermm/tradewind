@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Tradewind
+Comment=TradeSkillMaster companion for World of Warcraft
+Comment[de]=TradeSkillMaster-Begleiter für World of Warcraft
+Exec=tradewind
+Icon=tradewind
+Terminal=false
+Categories=Game;
+StartupWMClass=tradewind

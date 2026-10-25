@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: TradeSkillMaster addon issues
+    url: https://support.tradeskillmaster.com
+    about: Problems with the in-game TSM addon itself belong to TSM support, not this project.
