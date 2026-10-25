@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.2](https://github.com/marcomaiermm/tradewind/compare/v0.1.1...v0.1.2) (2026-10-25)
+
+
+### Features
+
+* install script and stable download links ([b5fdaca](https://github.com/marcomaiermm/tradewind/commit/b5fdacabe3047a1a940b5ea3bb4b25e399ff1e45))
+
 ## [0.1.1](https://github.com/marcomaiermm/tradewind/compare/v0.1.0...v0.1.1) (2026-10-25)
 
 
