@@ -88,10 +88,7 @@ impl Coordinator {
             settings.wow_path = path;
         }
         let mut engine = Engine::new(paths, settings.clone())?;
-        if let Some(warning) = warning {
-            engine.log_error(&warning);
-            engine.startup_warning = Some(warning);
-        }
+        engine.startup_warning = warning;
         Ok((
             Self {
                 engine: Arc::new(Mutex::new(engine)),
