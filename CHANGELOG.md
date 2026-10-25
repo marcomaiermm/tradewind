@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.3](https://github.com/marcomaiermm/tradewind/compare/v0.1.2...v0.1.3) (2026-10-25)
+
+
+### Features
+
+* sign the rpm package ([baa61f1](https://github.com/marcomaiermm/tradewind/commit/baa61f11f54430789c9f3c170734f5f0035f4f55))
+
 ## [0.1.2](https://github.com/marcomaiermm/tradewind/compare/v0.1.1...v0.1.2) (2026-10-25)
 
 
