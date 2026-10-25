@@ -1,6 +1,6 @@
 [package]
 name = "tradewind"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 rust-version = "1.92"
 description = "Native Linux companion for TradeSkillMaster (World of Warcraft): price sync, addon updates, backups, accounting and an offline auction house browser"
