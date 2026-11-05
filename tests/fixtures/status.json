@@ -29,8 +29,7 @@
   ],
   "regions": [
     {
-      "name": "EU",
-      "appDataStrings": {}
+      "name": "EU"
     }
   ],
   "realms-Progression": [
@@ -63,7 +62,7 @@
   "extraClassicRegions": [
     {
       "name": "Classic-EU",
-      "appDataStrings": {}
+      "appDataStrings": []
     }
   ],
   "extraAnniversaryRealms": [
