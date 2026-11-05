@@ -63,7 +63,7 @@
   "extraClassicRegions": [
     {
       "name": "Classic-EU",
-      "appDataStrings": {}
+      "appDataStrings": []
     }
   ],
   "extraAnniversaryRealms": [

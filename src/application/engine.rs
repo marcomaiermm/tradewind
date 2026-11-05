@@ -948,12 +948,13 @@ fn sync_targets(status: &Value, installation: &Installation) -> Result<Vec<Targe
                         continue;
                     }
                 }
-                let strings = entry["appDataStrings"]
-                    .as_object()
-                    .context(msg!(MissingAppDataStrings))?
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect();
+                // PHP encodes an empty map as `[]`; a realm without data just syncs nothing.
+                let strings = match &entry["appDataStrings"] {
+                    Value::Object(map) => map.clone().into_iter().collect(),
+                    Value::Null => BTreeMap::new(),
+                    Value::Array(list) if list.is_empty() => BTreeMap::new(),
+                    _ => bail!(msg!(MissingAppDataStrings)),
+                };
                 result.push(Target {
                     game,
                     name: name.into(),
