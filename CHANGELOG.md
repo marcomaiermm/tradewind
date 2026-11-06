@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.4](https://github.com/marcomaiermm/tradewind/compare/v0.1.3...v0.1.4) (2026-11-06)
+
+
+### Features
+
+* switch to the new TSM desktop API ([#8](https://github.com/marcomaiermm/tradewind/issues/8)) ([ecb80f8](https://github.com/marcomaiermm/tradewind/commit/ecb80f856f7978556e8ca26890a725ca03fe336c))
+
+
+### Bug Fixes
+
+* accept empty appDataStrings in the status response ([#6](https://github.com/marcomaiermm/tradewind/issues/6)) ([80b3435](https://github.com/marcomaiermm/tradewind/commit/80b3435d27dfb1ab0cd54be6d1ffdb880cd3c00e))
+
 ## [0.1.3](https://github.com/marcomaiermm/tradewind/compare/v0.1.2...v0.1.3) (2026-10-25)
 
 
