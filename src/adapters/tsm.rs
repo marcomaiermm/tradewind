@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 use std::{
     io::{BufRead, BufReader, Read, Write},
     net::TcpListener,
+    sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
 };
 
@@ -23,7 +24,12 @@ const SCOPE: &str = "openid roles profile email tsm-profile offline_access";
 const KEYRING_ACCOUNT: &str = "desktop-app";
 const MAX_BODY: usize = 128 * 1024 * 1024;
 const LOGIN_WAIT: Duration = Duration::from_secs(300);
-const CALLBACK_PAGE: &str = "<!doctype html><meta charset=utf-8><title>Tradewind</title><p>Signed in. You can close this tab and return to Tradewind.</p>";
+const CALLBACK_PAGE: &str = "<!doctype html><meta charset=utf-8><title>Tradewind</title><p>Sign-in received. You can close this tab and return to Tradewind.</p>";
+/// Set on quit, so a pending browser sign-in does not hold up the shutdown.
+static LOGIN_CANCELLED: AtomicBool = AtomicBool::new(false);
+pub fn cancel_login() {
+    LOGIN_CANCELLED.store(true, Ordering::SeqCst);
+}
 
 fn transport_error(operation: impl Into<Text>, error: reqwest::Error) -> anyhow::Error {
     let operation = operation.into();
@@ -126,17 +132,20 @@ fn random_token() -> Result<String> {
     Ok(URL_SAFE_NO_PAD.encode(bytes))
 }
 /// Serves the browser's redirect to `/auth/callback` and returns its authorization code.
-fn await_callback(listener: TcpListener, state: &str) -> Result<String> {
-    listener.set_nonblocking(true)?;
+/// Requests with another path, a foreign `state` or no code are answered and ignored.
+fn await_callback(listeners: &[TcpListener], state: &str) -> Result<String> {
+    for listener in listeners {
+        listener.set_nonblocking(true)?;
+    }
     let deadline = Instant::now() + LOGIN_WAIT;
     while Instant::now() < deadline {
-        let mut stream = match listener.accept() {
-            Ok((stream, _)) => stream,
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                std::thread::sleep(Duration::from_millis(100));
-                continue;
-            }
-            Err(e) => return Err(e.into()),
+        ensure!(!LOGIN_CANCELLED.load(Ordering::SeqCst), msg!(LoginTimeout));
+        let Some(mut stream) = listeners
+            .iter()
+            .find_map(|listener| listener.accept().ok().map(|(stream, _)| stream))
+        else {
+            std::thread::sleep(Duration::from_millis(100));
+            continue;
         };
         stream.set_nonblocking(false)?;
         stream.set_read_timeout(Some(Duration::from_secs(5)))?;
@@ -146,32 +155,31 @@ fn await_callback(listener: TcpListener, state: &str) -> Result<String> {
             continue;
         }
         let target = line.split_whitespace().nth(1).unwrap_or("/");
-        let Ok(url) = Url::parse(&format!("http://localhost{target}")) else {
-            continue;
-        };
-        let (status, page) = if url.path() == "/auth/callback" {
-            ("200 OK", CALLBACK_PAGE)
-        } else {
-            ("404 Not Found", "")
+        let code = Url::parse(&format!("http://localhost{target}"))
+            .ok()
+            .filter(|url| url.path() == "/auth/callback")
+            .and_then(|url| {
+                let param = |name: &str| {
+                    url.query_pairs()
+                        .find(|(key, _)| key == name)
+                        .map(|(_, value)| value.into_owned())
+                };
+                (param("state").as_deref() == Some(state))
+                    .then(|| param("code"))
+                    .flatten()
+            });
+        let (status, page) = match code {
+            Some(_) => ("200 OK", CALLBACK_PAGE),
+            None => ("404 Not Found", ""),
         };
         let _ = write!(
             stream,
             "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{page}",
             page.len()
         );
-        if url.path() != "/auth/callback" {
-            continue;
+        if let Some(code) = code {
+            return Ok(code);
         }
-        let param = |name: &str| {
-            url.query_pairs()
-                .find(|(key, _)| key == name)
-                .map(|(_, value)| value.into_owned())
-        };
-        ensure!(
-            param("state").as_deref() == Some(state),
-            msg!(LoginRejected)
-        );
-        return param("code").context(msg!(LoginRejected));
     }
     bail!(msg!(LoginTimeout))
 }
@@ -187,6 +195,8 @@ pub enum Packet {
     Ping,
     /// Socket.IO connection refused, e.g. for a rejected token.
     Refused,
+    /// Engine.IO close or Socket.IO disconnect from the server.
+    Closed,
     Event(String, Value),
 }
 /// Packets of one polling response are joined by the record separator `\x1e`.
@@ -198,6 +208,9 @@ pub fn packets(body: &str) -> Vec<Packet> {
             }
             if packet.starts_with("44") {
                 return Some(Packet::Refused);
+            }
+            if packet == "1" || packet == "41" {
+                return Some(Packet::Closed);
             }
             let Value::Array(mut event) = serde_json::from_str(packet.strip_prefix("42")?).ok()?
             else {
@@ -298,7 +311,8 @@ impl Api {
         }
         channels
     }
-    async fn token(&self, form: &[(&str, &str)], operation: Text, rejected: Text) -> Result<Value> {
+    /// `None` when the server rejects the grant, as opposed to a transport failure.
+    async fn token(&self, form: &[(&str, &str)], operation: Text) -> Result<Option<Value>> {
         let response = self
             .client
             .post(format!("{AUTH}/token"))
@@ -307,19 +321,22 @@ impl Api {
             .await
             .map_err(|e| transport_error(operation, e))?;
         if matches!(response.status().as_u16(), 400 | 401 | 403) {
-            bail!(rejected);
+            return Ok(None);
         }
         self.read_json(response.error_for_status().map_err(|e| e.without_url())?)
             .await
+            .map(Some)
     }
     /// Browser sign-in: authorization code with PKCE, received on a one-shot loopback listener.
     pub async fn login(&mut self, remember: bool) -> Result<Option<Text>> {
-        let listener = TcpListener::bind("127.0.0.1:0")?;
         // Keycloak accepts any port, but only the host `localhost` and this exact path.
-        let redirect = format!(
-            "http://localhost:{}/auth/callback",
-            listener.local_addr()?.port()
-        );
+        // Browsers may resolve `localhost` to either loopback address, so listen on both.
+        let ipv4 = TcpListener::bind("127.0.0.1:0")?;
+        let port = ipv4.local_addr()?.port();
+        let listeners: Vec<_> = std::iter::once(ipv4)
+            .chain(TcpListener::bind(("::1", port)).ok())
+            .collect();
+        let redirect = format!("http://localhost:{port}/auth/callback");
         let (verifier, state) = (random_token()?, random_token()?);
         let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(&verifier));
         let url = Url::parse_with_params(
@@ -336,7 +353,8 @@ impl Api {
             ],
         )?;
         tokio::task::spawn_blocking(move || desktop::open(url.as_str())).await??;
-        let code = tokio::task::spawn_blocking(move || await_callback(listener, &state)).await??;
+        let code =
+            tokio::task::spawn_blocking(move || await_callback(&listeners, &state)).await??;
         let token = self
             .token(
                 &[
@@ -347,9 +365,9 @@ impl Api {
                     ("code_verifier", &verifier),
                 ],
                 msg!(Authentication),
-                msg!(LoginRejected),
             )
-            .await?;
+            .await?
+            .context(msg!(LoginRejected))?;
         self.remember = remember;
         self.apply_token(token)?;
         let token = self.refresh.clone();
@@ -383,7 +401,7 @@ impl Api {
         self.renew().await
     }
     async fn renew(&mut self) -> Result<()> {
-        let token = self
+        let Some(token) = self
             .token(
                 &[
                     ("grant_type", "refresh_token"),
@@ -391,10 +409,13 @@ impl Api {
                     ("refresh_token", &self.refresh),
                 ],
                 msg!(RefreshSession),
-                msg!(SessionExpired),
             )
-            .await
-            .inspect_err(|_| self.access.clear())?;
+            .await?
+        else {
+            // Only a rejected refresh token ends the session; network errors retry later.
+            self.access.clear();
+            bail!(msg!(SessionExpired));
+        };
         self.apply_token(token)?;
         if self.remember {
             let token = self.refresh.clone();
@@ -551,9 +572,12 @@ impl Api {
                         send("3").await?;
                     }
                     Packet::Refused => bail!(msg!(SessionRejected)),
+                    Packet::Closed => bail!(msg!(InvalidResponse)),
                 }
             }
         }
+        // Engine.IO close, so the server drops the session now instead of after a ping timeout.
+        let _ = send("1").await;
         Ok(feed)
     }
     /// Raw body of a presigned or CDN URL, without credentials.
@@ -648,6 +672,7 @@ mod fixtures {
             packets("2\x1e42[\"app_info\",{\"news\":[]}]\x1e40\x1e44{}").len(),
             3
         );
+        assert_eq!(packets("41\x1e1"), vec![Packet::Closed, Packet::Closed]);
         assert_eq!(
             packets("42[\"addon\",{\"isComplete\":true}]"),
             vec![Packet::Event("addon".into(), json!({"isComplete":true}))]

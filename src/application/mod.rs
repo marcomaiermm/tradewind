@@ -144,6 +144,7 @@ impl Coordinator {
     /// Stop new work and wait for the current foreground or scheduled operation to finish.
     pub async fn shutdown(&self) {
         self.stopping.store(true, Ordering::SeqCst);
+        crate::adapters::tsm::cancel_login();
         let _engine = self.engine.lock().await;
     }
     fn outcome(engine: &Engine, result: Result<Text, Text>) -> Outcome {

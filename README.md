@@ -208,7 +208,7 @@ tradewind --inspect "/path/to/World of Warcraft"   # read-only installation chec
 | Item icon cache | `$XDG_CACHE_HOME/tradewind/` |
 | Refresh token (optional) | Secret Service keyring |
 
-Restore and addon installation require WoW to be closed. Tradewind never imports credentials or settings from the Windows client.
+Restore, backups and automatic addon updates require WoW to be closed. Manual addon installation also works while WoW runs: Tradewind backs up first, then type `/reload` in WoW to load the addon. Tradewind never imports credentials or settings from the Windows client.
 
 ## Project status
 
