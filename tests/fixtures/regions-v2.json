@@ -1,0 +1,74 @@
+{
+ "items": [
+  {
+   "regionId": 2,
+   "name": "Europe",
+   "regionPrefix": "eu",
+   "gmtOffset": 0,
+   "gameVersion": "Retail",
+   "lastModified": 1793930700,
+   "gameType": "retail",
+   "gameVersionType": "retail"
+  },
+  {
+   "regionId": 6,
+   "name": "Europe",
+   "regionPrefix": "eu",
+   "gmtOffset": 0,
+   "gameVersion": "Classic Era",
+   "lastModified": 1793930699,
+   "gameType": "classic",
+   "gameVersionType": "classic"
+  },
+  {
+   "regionId": 14,
+   "name": "Europe",
+   "regionPrefix": "eu",
+   "gmtOffset": 0,
+   "gameVersion": "Wrath",
+   "lastModified": 1793930699,
+   "gameType": "classic-progression",
+   "gameVersionType": "classic-progression"
+  },
+  {
+   "regionId": 18,
+   "name": "Europe",
+   "regionPrefix": "eu",
+   "gmtOffset": 0,
+   "gameVersion": "Classic Era - Hardcore",
+   "lastModified": 1793930699,
+   "gameType": "classic",
+   "gameVersionType": "classic-hardcore"
+  },
+  {
+   "regionId": 22,
+   "name": "Europe",
+   "regionPrefix": "eu",
+   "gmtOffset": 0,
+   "gameVersion": "Season of Discovery",
+   "lastModified": 1793930691,
+   "gameType": "classic",
+   "gameVersionType": "classic-season-of-discovery"
+  },
+  {
+   "regionId": 26,
+   "name": "Europe",
+   "regionPrefix": "eu",
+   "gmtOffset": 0,
+   "gameVersion": "Classic Era - Fresh",
+   "lastModified": 1793930691,
+   "gameType": "classic",
+   "gameVersionType": "classic-fresh"
+  },
+  {
+   "regionId": 30,
+   "name": "Europe",
+   "regionPrefix": "eu",
+   "gmtOffset": 0,
+   "gameVersion": "Forever",
+   "lastModified": 1793930691,
+   "gameType": "forever",
+   "gameVersionType": "forever"
+  }
+ ]
+}

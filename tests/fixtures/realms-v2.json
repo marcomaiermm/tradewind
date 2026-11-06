@@ -1,0 +1,242 @@
+{
+ "items": [
+  {
+   "realmId": 247,
+   "regionId": 2,
+   "connectedRealmId": 509,
+   "name": "Garona",
+   "slug": "garona",
+   "localizedName": "Garona",
+   "locale": "fr_FR",
+   "auctionHouses": [
+    {
+     "auctionHouseId": 84,
+     "type": "All",
+     "lastModified": 1793985712
+    }
+   ],
+   "region": {
+    "regionId": 2,
+    "name": "Europe",
+    "regionPrefix": "eu",
+    "gameVersion": "Retail",
+    "gmtOffset": 0,
+    "lastModified": 1793930700,
+    "gameType": "retail",
+    "gameVersionType": "retail"
+   }
+  },
+  {
+   "realmId": 275,
+   "regionId": 2,
+   "connectedRealmId": 581,
+   "name": "Blackrock",
+   "slug": "blackrock",
+   "localizedName": "Blackrock",
+   "locale": "de_DE",
+   "auctionHouses": [
+    {
+     "auctionHouseId": 91,
+     "type": "All",
+     "lastModified": 1793985712
+    }
+   ],
+   "region": {
+    "regionId": 2,
+    "name": "Europe",
+    "regionPrefix": "eu",
+    "gameVersion": "Retail",
+    "gmtOffset": 0,
+    "lastModified": 1793930700,
+    "gameType": "retail",
+    "gameVersionType": "retail"
+   }
+  },
+  {
+   "realmId": 871,
+   "regionId": 6,
+   "connectedRealmId": 5225,
+   "name": "Transcendence",
+   "slug": "transcendence",
+   "localizedName": "Transcendence",
+   "locale": "de_DE",
+   "auctionHouses": [
+    {
+     "auctionHouseId": 208,
+     "type": "Horde",
+     "lastModified": 311460
+    },
+    {
+     "auctionHouseId": 207,
+     "type": "Alliance",
+     "lastModified": 313080
+    }
+   ],
+   "region": {
+    "regionId": 6,
+    "name": "Europe",
+    "regionPrefix": "eu",
+    "gameVersion": "Classic Era",
+    "gmtOffset": 0,
+    "lastModified": 1793930699,
+    "gameType": "classic",
+    "gameVersionType": "classic"
+   }
+  },
+  {
+   "realmId": 665,
+   "regionId": 13,
+   "connectedRealmId": 4372,
+   "name": "Atiesh",
+   "slug": "atiesh",
+   "localizedName": "Atiesh",
+   "locale": "en_US",
+   "auctionHouses": [
+    {
+     "auctionHouseId": 280,
+     "type": "Horde",
+     "lastModified": 1791812179
+    },
+    {
+     "auctionHouseId": 279,
+     "type": "Alliance",
+     "lastModified": 1793982178
+    }
+   ],
+   "region": {
+    "regionId": 13,
+    "name": "North America",
+    "regionPrefix": "us",
+    "gameVersion": "Wrath",
+    "gmtOffset": -8,
+    "lastModified": 1793952878,
+    "gameType": "classic-progression",
+    "gameVersionType": "classic-progression"
+   }
+  },
+  {
+   "realmId": 1808,
+   "regionId": 17,
+   "connectedRealmId": 6105,
+   "name": "Doomhowl",
+   "slug": "doomhowl",
+   "localizedName": "Doomhowl",
+   "locale": "en_US",
+   "auctionHouses": [
+    {
+     "auctionHouseId": 558,
+     "type": "Horde",
+     "lastModified": 1793982131
+    },
+    {
+     "auctionHouseId": 557,
+     "type": "Alliance",
+     "lastModified": 1793982133
+    }
+   ],
+   "region": {
+    "regionId": 17,
+    "name": "North America",
+    "regionPrefix": "us",
+    "gameVersion": "Classic Era - Hardcore",
+    "gmtOffset": -8,
+    "lastModified": 1793952878,
+    "gameType": "classic",
+    "gameVersionType": "classic-hardcore"
+   }
+  },
+  {
+   "realmId": 1059,
+   "regionId": 21,
+   "connectedRealmId": 5817,
+   "name": "Penance (AU)",
+   "slug": "penance-au",
+   "localizedName": "Penance (AU)",
+   "locale": "en_US",
+   "auctionHouses": [
+    {
+     "auctionHouseId": 494,
+     "type": "Horde",
+     "lastModified": 312120
+    },
+    {
+     "auctionHouseId": 493,
+     "type": "Alliance",
+     "lastModified": 1793982173
+    }
+   ],
+   "region": {
+    "regionId": 21,
+    "name": "North America",
+    "regionPrefix": "us",
+    "gameVersion": "Season of Discovery",
+    "gmtOffset": -8,
+    "lastModified": 1793952874,
+    "gameType": "classic",
+    "gameVersionType": "classic-season-of-discovery"
+   }
+  },
+  {
+   "realmId": 1809,
+   "regionId": 26,
+   "connectedRealmId": 6111,
+   "name": "Thunderstrike",
+   "slug": "thunderstrike",
+   "localizedName": "Thunderstrike",
+   "locale": "en_GB",
+   "auctionHouses": [
+    {
+     "auctionHouseId": 560,
+     "type": "Horde",
+     "lastModified": 1793982812
+    },
+    {
+     "auctionHouseId": 559,
+     "type": "Alliance",
+     "lastModified": 1793982153
+    }
+   ],
+   "region": {
+    "regionId": 26,
+    "name": "Europe",
+    "regionPrefix": "eu",
+    "gameVersion": "Classic Era - Fresh",
+    "gmtOffset": 0,
+    "lastModified": 1793930691,
+    "gameType": "classic",
+    "gameVersionType": "classic-fresh"
+   }
+  },
+  {
+   "realmId": 1101,
+   "regionId": 30,
+   "connectedRealmId": -301,
+   "name": "Normal",
+   "slug": "normal",
+   "localizedName": "Normal",
+   "locale": "en_US",
+   "auctionHouses": [
+    {
+     "auctionHouseId": 574,
+     "type": "Horde",
+     "lastModified": 1793982220
+    },
+    {
+     "auctionHouseId": 573,
+     "type": "Alliance",
+     "lastModified": 1793982254
+    }
+   ],
+   "region": {
+    "regionId": 30,
+    "name": "Europe",
+    "regionPrefix": "eu",
+    "gameVersion": "Forever",
+    "gmtOffset": 0,
+    "lastModified": 1793930691,
+    "gameType": "forever",
+    "gameVersionType": "forever"
+   }
+  }
+ ]
+}

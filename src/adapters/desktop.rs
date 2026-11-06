@@ -177,6 +177,7 @@ pub fn notify(message: &str) {
 pub fn open(url: &str) -> Result<()> {
     anyhow::ensure!(
         url.starts_with("https://tradeskillmaster.com/")
+            || url.starts_with("https://id.tradeskillmaster.com/")
             || url.starts_with("https://support.tradeskillmaster.com/"),
         msg!(LinkForbidden)
     );

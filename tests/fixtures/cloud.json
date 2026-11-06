@@ -1,14 +1,39 @@
 {
-  "success": true,
-  "data": {
-    "abc_ACCOUNT-Anniversary": [
-      {
-        "timestamp": 1700000000,
-        "keep": true
-      }
-    ]
-  },
-  "missing": [
-    "abc_ACCOUNT-Anniversary_1700000000"
-  ]
+  "items": [
+    {
+      "backupId": "abc_ACCOUNT-Anniversary_1700000000",
+      "type": "original",
+      "previousId": null,
+      "gameVersion": "_anniversary_",
+      "account": "ACCOUNT-Anniversary",
+      "systemId": "abc",
+      "description": "Tradewind backup",
+      "timestamp": "2023-11-14T22:13:20.000Z",
+      "url": "https://tradeskillmaster.nyc3.digitaloceanspaces.com/backups/fixture.zip"
+    },
+    {
+      "backupId": "official-patch",
+      "type": "patch",
+      "previousId": "official-original",
+      "gameVersion": "_retail_",
+      "account": "ACCOUNT",
+      "systemId": "1a2b3c4d",
+      "description": "Misc data changed",
+      "timestamp": "2023-11-14T22:14:20.000Z",
+      "url": "https://tradeskillmaster.nyc3.digitaloceanspaces.com/backups/patch.json.gz"
+    },
+    {
+      "backupId": "abc_ACCOUNT_1700000100",
+      "type": "original",
+      "previousId": null,
+      "gameVersion": "_retail_",
+      "account": "ACCOUNT",
+      "systemId": "abc",
+      "description": "Tradewind backup",
+      "timestamp": "2023-11-14T22:15:00.000Z"
+    }
+  ],
+  "metadata": {
+    "totalItems": 3
+  }
 }

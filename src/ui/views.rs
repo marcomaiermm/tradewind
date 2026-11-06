@@ -188,9 +188,7 @@ impl App {
                     .iter()
                     .filter(|a| a.game == game)
                     .collect();
-                let text_status = if !game.tsm_supported() {
-                    l.text(Key::TsmUnsupportedGame)
-                } else if addons.iter().any(|a| a.version.is_none()) {
+                let text_status = if addons.iter().any(|a| a.version.is_none()) {
                     l.text(Key::MissingAddons)
                 } else {
                     l.text(Key::InstalledAddons)
@@ -291,7 +289,7 @@ impl App {
                             ),
                             None => space().into(),
                         },
-                        caption(if sync.game.subscribable() {
+                        caption(if sync.removable {
                             l.text(Key::TsmAccount)
                         } else {
                             l.text(Key::AutomaticRealm)
@@ -363,9 +361,6 @@ impl App {
                     .spacing(10)
                     .align_y(alignment::Vertical::Center),
             );
-            if !game.tsm_supported() {
-                content = content.push(caption(l.text(Key::TsmUnsupportedGame)));
-            }
             for addon in self
                 .snapshot
                 .installation
@@ -763,16 +758,10 @@ impl App {
             return card(
                 column![
                     heading(l.text(Key::AccountConnected)),
-                    text(&self.settings.email),
                     text(if self.snapshot.premium {
                         l.text(Key::PremiumDescription)
                     } else {
                         l.text(Key::FreeDescription)
-                    }),
-                    caption(if self.legacy_http {
-                        l.text(Key::LegacyActive)
-                    } else {
-                        l.text(Key::HttpsConnection)
                     }),
                     action(
                         l.text(Key::SignOut),
@@ -784,32 +773,15 @@ impl App {
             )
             .into();
         }
-        let missing = if self.email.is_empty() || self.password.is_empty() {
-            Some(Key::SignInNeedsCredentials)
-        } else if !self.terms {
-            Some(Key::SignInNeedsTerms)
-        } else {
-            None
-        };
+        let missing = (!self.terms).then_some(Key::SignInNeedsTerms);
         let login = column![
             heading(l.text(Key::SignInTsm)),
-            text(l.text(Key::CredentialsHint)).size(15),
+            text(l.text(Key::BrowserSignInHint)).size(15),
             space().height(6),
-            text(l.text(Key::Email)).size(14),
-            input("name@example.com", &self.email).on_input(Message::Email),
-            text(l.text(Key::Password)).size(14),
-            input(l.text(Key::Password), &self.password)
-                .secure(true)
-                .on_input(Message::Password)
-                .on_submit(Message::Login),
-            check(self.legacy_http)
-                .label(l.text(Key::LegacyOption))
-                .on_toggle_maybe((!self.busy).then_some(Message::LegacyHttp)),
-            caption(l.text(Key::LegacyWarning)),
             check(self.remember)
                 .label(l.text(Key::RememberLogin))
                 .on_toggle(Message::Remember),
-            caption(l.text(Key::PasswordNotStored)),
+            caption(l.text(Key::TokenKeptInKeyring)),
             check(self.terms)
                 .label(l.text(Key::AcceptTerms))
                 .on_toggle(Message::Terms),
@@ -821,8 +793,6 @@ impl App {
             action(
                 if self.busy {
                     l.text(Key::SigningIn)
-                } else if self.legacy_http {
-                    l.text(Key::SignInLegacy)
                 } else {
                     l.text(Key::SignIn)
                 },
@@ -845,17 +815,9 @@ impl App {
     }
     fn activity(&self) -> Element<'_, Message> {
         let l = self.language();
+        // ponytail: uploading the log to TSM is not ported yet, spec §6 (no log endpoint found).
         let mut content = column![
-            row![
-                heading(l.text(Key::ActivityLog)),
-                space().width(Length::Fill),
-                action(
-                    l.text(Key::SendToTsm),
-                    (!self.busy && self.snapshot.logged_in).then_some(Message::UploadLog)
-                )
-                .style(secondary)
-            ]
-            .align_y(alignment::Vertical::Center),
+            heading(l.text(Key::ActivityLog)),
             caption(l.text(Key::LogPrivacy))
         ]
         .spacing(16);

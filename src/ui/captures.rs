@@ -108,8 +108,6 @@ fn render_native_views_without_compositor() {
     assert!(result.result.is_ok());
     let _ = app.update(Message::Finished(result));
     app.root = "/Games/World of Warcraft".into();
-    // App::new reads the developer's settings, and frames must not show a real address.
-    app.email = "name@example.com".into();
     app.snapshot.realms =
         serde_json::from_str(include_str!("../../tests/fixtures/realm-selection.json")).unwrap();
     app.snapshot.registered_realms = vec![app.snapshot.realms[0].clone()];
@@ -126,7 +124,7 @@ fn render_native_views_without_compositor() {
         region: region.into(),
         timestamp: 1_790_000_000,
         error: None,
-        removable: game.subscribable(),
+        removable: true,
     })
     .collect();
     let entry = |time: &str, message, error| application::LogLine {

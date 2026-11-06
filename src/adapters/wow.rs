@@ -75,9 +75,6 @@ pub fn scan(path: &Path) -> Result<Installation> {
             continue;
         }
         result.games.push(game);
-        if !game.tsm_supported() {
-            continue;
-        }
         for name in ["TradeSkillMaster", "TradeSkillMaster_AppHelper"] {
             let path = addon_dir(&root, game)
                 .join(name)
@@ -342,16 +339,6 @@ pub fn csv(input: &str) -> Result<Vec<Vec<String>>> {
     }
     Ok(rows)
 }
-pub fn csv_records(input: &str) -> Result<Vec<BTreeMap<String, String>>> {
-    let rows = csv(input)?;
-    let Some(header) = rows.first() else {
-        return Ok(Vec::new());
-    };
-    Ok(rows[1..]
-        .iter()
-        .map(|row| header.iter().cloned().zip(row.iter().cloned()).collect())
-        .collect())
-}
 pub fn accounting_realms(account: &Account) -> Result<Vec<String>> {
     Ok(scopes(&account.data("TradeSkillMaster")?, "realm"))
 }
@@ -463,7 +450,7 @@ mod tests {
         assert!(fs::read_to_string(path).unwrap().contains("[=[return"));
     }
     #[test]
-    fn games_without_tsm_support_are_listed_but_never_scanned() {
+    fn forever_is_scanned_like_every_other_version() {
         let root = tempfile::tempdir().unwrap();
         for game in [Game::Retail, Game::Forever] {
             let saved = root
@@ -475,8 +462,8 @@ mod tests {
         }
         let found = scan(root.path()).unwrap();
         assert_eq!(found.games, [Game::Retail, Game::Forever]);
-        assert!(found.accounts.iter().all(|a| a.game == Game::Retail));
-        assert!(found.addons.iter().all(|a| a.game == Game::Retail));
+        assert_eq!(found.accounts.len(), 2);
+        assert!(found.addons.iter().any(|a| a.game == Game::Forever));
     }
 }
 

@@ -1,0 +1,47 @@
+{
+  "sub": "00000000-0000-4000-8000-000000000000",
+  "realm_access": {
+    "roles": [
+      "offline_access",
+      "member",
+      "uma_authorization",
+      "default-roles-app"
+    ]
+  },
+  "resource_access": {
+    "app-app-backend-sockets": {
+      "roles": [
+        "socket/accessor"
+      ]
+    },
+    "app-realm": {
+      "roles": [
+        "auction-houses/accessor",
+        "realms/accessor",
+        "regions/accessor"
+      ]
+    },
+    "app-pricing": {
+      "roles": [
+        "great-deals/accessor",
+        "auction-house-prices/accessor"
+      ]
+    },
+    "app-addon-version": {
+      "roles": [
+        "channel/release"
+      ]
+    },
+    "account": {
+      "roles": [
+        "manage-account",
+        "manage-account-links",
+        "delete-account",
+        "view-profile"
+      ]
+    }
+  },
+  "scope": "openid offline_access profile email tsm-profile",
+  "exp": 1794590965,
+  "iat": 1793986165
+}

@@ -167,10 +167,7 @@ enum Message {
     ResetRealmFilters,
     RealmFiltersSaved(Result<(), LocalizedText>),
     AddRealm(Realm),
-    Email(String),
-    Password(String),
     Remember(bool),
-    LegacyHttp(bool),
     Terms(bool),
     Login,
     Logout,
@@ -188,7 +185,6 @@ enum Message {
     Export,
     Link(String),
     LinkFinished(Result<(), LocalizedText>),
-    UploadLog,
     DesktopReady(tokio::sync::mpsc::UnboundedSender<DesktopEvent>),
     Desktop(DesktopEvent),
     Show,
@@ -205,7 +201,6 @@ enum Message {
 impl std::fmt::Debug for Message {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Password(_) => f.write_str("Password(<redacted>)"),
             Self::Finished(_) => f.write_str("Finished"),
             _ => f.write_str("UI action"),
         }
@@ -229,10 +224,7 @@ struct App {
     quitting: bool,
     status: LocalizedText,
     error: bool,
-    email: String,
-    password: String,
     remember: bool,
-    legacy_http: bool,
     root: String,
     hours: String,
     days: String,
@@ -333,8 +325,6 @@ impl App {
             root: settings.wow_path.to_string_lossy().into_owned(),
             hours: settings.backup_hours.to_string(),
             days: settings.retention_days.to_string(),
-            email: settings.email.clone(),
-            legacy_http: settings.legacy_http,
             realm_picker: realm_picker::State::new(settings.realm_filters.clone()),
             preferences: settings.preferences(),
             terms: settings.terms_accepted,
@@ -347,7 +337,6 @@ impl App {
             pending_save: None,
             status: error.clone().unwrap_or_else(|| msg!(ReadingInstallation)),
             error: error.is_some(),
-            password: String::new(),
             remember: false,
             adding_realm: None,
             auction: application::auction::Browser::default(),
@@ -606,7 +595,6 @@ impl App {
                     self.select_account();
                 }
                 if resumed {
-                    self.password.clear();
                     self.page = Page::Overview;
                 }
                 let scroll = if previous_market != self.auction.catalog.selected {
@@ -709,14 +697,10 @@ impl App {
                 if self.busy {
                     return Task::none();
                 }
-                let password = std::mem::take(&mut self.password);
                 return self.start(
                     Action::Login {
-                        email: self.email.trim().into(),
-                        password,
                         remember: self.remember,
                         terms: self.terms,
-                        legacy_http: self.legacy_http,
                     },
                     msg!(SigningIn),
                 );
@@ -858,14 +842,7 @@ impl App {
                 self.adding_realm = Some(realm.clone());
                 return self.start(Action::AddRealm(realm), msg!(AddingRealm));
             }
-            Message::Email(email) => self.email = email,
-            Message::Password(password) => self.password = password,
             Message::Remember(remember) => self.remember = remember,
-            Message::LegacyHttp(enabled) => {
-                if !self.busy && !self.snapshot.logged_in {
-                    self.legacy_http = enabled;
-                }
-            }
             Message::Terms(terms) => self.terms = terms,
             Message::Root(root) => self.root = root,
             Message::Language(language) => {
@@ -922,9 +899,6 @@ impl App {
                     self.status = error;
                     self.error = true;
                 }
-            }
-            Message::UploadLog => {
-                return self.start(Action::UploadLog, msg!(UploadingLog));
             }
             Message::WindowClosed(id) => {
                 if self.window == Some(id) {

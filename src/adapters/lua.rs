@@ -265,43 +265,6 @@ pub fn quote(s: &str) -> String {
     result
 }
 
-pub fn prettify(db: &Value) -> Result<Value> {
-    let mut result = serde_json::json!({"realm":{},"sync":{},"factionrealm":{},"global":{},"char":{},"profile":{}});
-    for (key, value) in db.as_object().context(msg!(TsmDbNotTable))? {
-        if key.starts_with('_') {
-            if !["_hash", "_lastModifiedVersion"].contains(&key.as_str()) {
-                result[key] = value.clone();
-            }
-            continue;
-        }
-        let parts: Vec<_> = key.split('@').collect();
-        ensure!(parts.len() == 4, msg!(UnknownDbKey));
-        let scope = match parts[0] {
-            "r" => "realm",
-            "s" => "sync",
-            "f" => "factionrealm",
-            "g" => "global",
-            "c" => "char",
-            "p" => "profile",
-            _ => bail!(msg!(UnknownScope)),
-        };
-        let object = result[scope]
-            .as_object_mut()
-            .unwrap()
-            .entry(parts[1])
-            .or_insert_with(|| serde_json::json!({}));
-        let ns = object
-            .as_object_mut()
-            .unwrap()
-            .entry(parts[2])
-            .or_insert_with(|| serde_json::json!({}));
-        ns.as_object_mut()
-            .unwrap()
-            .insert(parts[3].to_owned(), value.clone());
-    }
-    Ok(result)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -331,10 +294,6 @@ mod fixtures {
         let globals = parse(include_str!("../../tests/fixtures/savedvariables.lua")).unwrap();
         let db = &globals["TradeSkillMasterDB"];
         assert_eq!(values(&db["_scopeKeys"]["realm"])[0], "Test Realm");
-        let pretty = prettify(db).unwrap();
-        assert_eq!(pretty["_version"], 7);
-        assert!(pretty.get("_hash").is_none());
-        assert!(pretty["realm"]["Test Realm"]["internalData"]["csvSales"].is_string());
         let original = "Grüße\0\n\x027\\\"";
         assert_eq!(
             parse(&format!("DB = {}", quote(original))).unwrap()["DB"],
