@@ -5,18 +5,17 @@ use crate::{
         desktop,
         files::{self as storage, Paths, Preferences, Settings},
         lua,
-        tsm::{Api, Body, PROTOCOL_VERSION, encoded},
-        uploads,
+        tsm::{Api, BACKEND, Feed, REALM_API},
         wow::{self, AppData, Installation},
     },
     core::{
-        self, ExportKind, Game, Realm, RealmFilters,
+        self, ExportKind, Faction, Game, Realm, RealmFilters,
         auction::{Catalog, Favorite, Market},
     },
 };
 use anyhow::{Context, Result, bail, ensure};
-use chrono::Utc;
-use serde_json::Value;
+use chrono::{DateTime, SecondsFormat, TimeZone, Utc};
+use serde_json::{Value, json};
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc, time::Instant};
 
 #[derive(Clone, Debug, Default)]
@@ -57,6 +56,7 @@ impl Snapshot {
             registered.game == realm.game
                 && registered.region == realm.region
                 && registered.id == realm.id
+                && registered.name == realm.name
         })
     }
     pub fn can_restore(&self, backup: &Backup) -> bool {
@@ -83,12 +83,10 @@ pub enum Action {
     Bootstrap,
     InspectAt(PathBuf),
     ChooseDirectory(PathBuf),
+    /// Opens the browser sign-in and waits for it.
     Login {
-        email: String,
-        password: String,
         remember: bool,
         terms: bool,
-        legacy_http: bool,
     },
     Logout,
     Sync,
@@ -103,7 +101,6 @@ pub enum Action {
     RemoveRealm(SyncRow),
     /// Account protocol name, accounting realm and kind. The destination is asked for.
     Export(String, String, ExportKind),
-    UploadLog,
     BrowseMarket(Option<Market>),
     ToggleFavorite(Favorite),
 }
@@ -144,6 +141,10 @@ pub(crate) struct Engine {
     pub(crate) revision: u64,
     pub paths: Paths,
     api: Api,
+    /// Subscribed realms with the id of their subscription record, which removal needs.
+    user_realms: Vec<(Realm, String)>,
+    /// Addon zips of the selected channel from the last socket feed.
+    addon_urls: BTreeMap<String, String>,
     pub snapshot: Snapshot,
     last_attempt: Instant,
     last_backup_attempt: Instant,
@@ -152,12 +153,14 @@ pub(crate) struct Engine {
 }
 impl Engine {
     pub(crate) fn new(paths: Paths, settings: Settings) -> Result<Self> {
-        let api = Api::new(settings.legacy_http)?;
+        let api = Api::new()?;
         Ok(Self {
             settings,
             revision: 0,
             paths,
             api,
+            user_realms: Vec::new(),
+            addon_urls: BTreeMap::new(),
             snapshot: Snapshot::default(),
             last_attempt: Instant::now(),
             last_backup_attempt: Instant::now(),
@@ -278,7 +281,7 @@ impl Engine {
                     bail!(warning);
                 }
                 if self.settings.remember_login {
-                    self.api.resume(self.settings.email.clone()).await?;
+                    self.api.resume().await?;
                 }
                 msg!(InstallationRead)
             }
@@ -314,21 +317,12 @@ impl Engine {
                     Some(desktop::choose_directory(&initial, self.language()).await?);
                 msg!(DirectorySelected)
             }
-            Action::Login {
-                email,
-                password,
-                remember,
-                terms,
-                legacy_http,
-            } => {
+            Action::Login { remember, terms } => {
                 ensure!(terms, msg!(TermsRequired));
-                self.api = Api::new(legacy_http)?;
-                let warning = self.api.login(email.clone(), password, remember).await?;
+                let warning = self.api.login(remember).await?;
                 let mut settings = self.settings.clone();
                 settings.terms_accepted = terms;
                 settings.remember_login = remember;
-                settings.legacy_http = legacy_http;
-                settings.email = email;
                 self.save(settings)?;
                 warning.unwrap_or_else(|| msg!(LoggedIn))
             }
@@ -339,6 +333,7 @@ impl Engine {
                 self.save(settings)?;
                 self.snapshot.realms.clear();
                 self.snapshot.registered_realms.clear();
+                self.user_realms.clear();
                 self.snapshot.sync.clear();
                 self.snapshot.backups.retain(|b| !b.remote);
                 result?;
@@ -381,12 +376,19 @@ impl Engine {
             Action::Sync => self.sync().await?,
             Action::Install(game, addon) => {
                 self.api.ensure_session().await?;
+                let feed = self.api.feed().await?;
+                self.apply_feed_info(&feed);
                 self.scan()?;
-                self.backup_due(true, true)?;
+                // Addon files are only read on login or `/reload`, so WoW may keep running.
+                self.archive(true, true)?;
                 self.install(game, &addon).await?;
                 self.scan()?;
                 self.refresh_backups()?;
-                msg!(AddonInstalled, addon = addon, game = game.label())
+                if wow::running() {
+                    msg!(AddonInstalledReload, addon = addon, game = game.label())
+                } else {
+                    msg!(AddonInstalled, addon = addon, game = game.label())
+                }
             }
             Action::Backup => {
                 self.scan()?;
@@ -419,10 +421,13 @@ impl Engine {
                     archive::restore(&self.paths, &self.settings, &account, path)?;
                 } else {
                     self.api.ensure_session().await?;
-                    let bytes = self
-                        .api
-                        .binary(&["backup", &encoded(&backup.remote_name())], None)
-                        .await?;
+                    let list = self.api.get(&format!("{BACKEND}/backups")).await?;
+                    let url = remote_backups(&list)?
+                        .into_iter()
+                        .find(|(remote, _)| remote.remote_name() == backup.remote_name())
+                        .context(msg!(CloudOnlyBackup))?
+                        .1;
+                    let bytes = self.api.fetch(&url).await?;
                     archive::restore_bytes(&self.paths, &self.settings, &account, &bytes)?;
                 }
                 self.inspect()?;
@@ -434,27 +439,41 @@ impl Engine {
                     return Ok(msg!(RealmAlreadyAdded, name = realm.name));
                 }
                 self.api.ensure_session().await?;
+                let body = json!({
+                    "realmId": realm.id.parse::<i64>().context(msg!(MissingRealmId))?,
+                    "userId": self.api.user_id()?,
+                    "auctionHouseType": auction_house(core::realm_name_and_faction(realm.game, &realm.name).1),
+                });
                 self.api
-                    .get(&["realms2", "add", realm.game.protocol(), &realm.id])
+                    .post(&format!("{BACKEND}/user-realms"), body)
                     .await?;
-                self.snapshot.registered_realms.push(realm.clone());
+                self.refresh_user_realms().await?;
                 msg!(RealmAdded, name = realm.name)
             }
             Action::RemoveRealm(row) => {
                 ensure!(row.removable, msg!(AutomaticRealmRemoval));
+                let record = self
+                    .user_realms
+                    .iter()
+                    .find(|(realm, _)| {
+                        realm.game == row.game
+                            && realm.region == row.region
+                            && realm.name == row.name
+                    })
+                    .context(msg!(StaleRealm))?
+                    .1
+                    .clone();
+                ensure!(
+                    record
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-'),
+                    msg!(InvalidResponse)
+                );
                 self.api.ensure_session().await?;
                 self.api
-                    .get(&[
-                        "realms2",
-                        "remove",
-                        row.game.protocol(),
-                        &row.region,
-                        &row.name,
-                    ])
+                    .delete(&format!("{BACKEND}/user-realms/{record}"))
                     .await?;
-                self.snapshot.registered_realms.retain(|realm| {
-                    realm.game != row.game || realm.region != row.region || realm.name != row.name
-                });
+                self.refresh_user_realms().await?;
                 msg!(RealmRemoved, name = row.name)
             }
             Action::Export(account_key, realm, kind) => {
@@ -483,13 +502,6 @@ impl Engine {
                     count = count,
                     path = destination.display().to_string()
                 )
-            }
-            Action::UploadLog => {
-                self.api.ensure_session().await?;
-                self.api
-                    .post(&["log", "user"], Body::Text(self.rendered_log()))
-                    .await?;
-                msg!(LogUploaded)
             }
         })
     }
@@ -530,6 +542,11 @@ impl Engine {
             }
             return Ok(0);
         }
+        self.archive(force, keep)
+    }
+    /// Like `backup_due`, also while WoW runs: SavedVariables on disk only change on logout
+    /// or `/reload`, so they are the last saved state.
+    fn archive(&mut self, force: bool, keep: bool) -> Result<usize> {
         let previous = archive::local_backups(&self.paths, &self.settings)?;
         let mut count = 0;
         for account in &self.snapshot.installation.accounts {
@@ -555,36 +572,54 @@ impl Engine {
         Ok(count)
     }
     async fn install(&self, game: Game, addon: &str) -> Result<()> {
-        let name = format!("{addon}{}", game.account_suffix());
-        let bytes = self
-            .api
-            .binary(&["addon", &name], Some(&self.settings.channel))
-            .await?;
+        let url = self.addon_urls.get(addon).context(msg!(MissingAddonUrl))?;
+        let bytes = self.api.fetch(url).await?;
         archive::install(&self.settings.wow_path, game, addon, &bytes)
     }
+    /// Uploads local backups the cloud does not have yet and lists the cloud ones.
     async fn sync_backups(&mut self) -> Result<()> {
         if !self.api.premium() {
             return Ok(());
         }
-        let info = self.api.get(&["backup"]).await?;
-        let mut remote = remote_backups(&info)?;
-        let missing = info["missing"]
-            .as_array()
-            .context(msg!(MissingBackupList))?;
+        let list = self.api.get(&format!("{BACKEND}/backups")).await?;
+        let mut remote: Vec<_> = remote_backups(&list)?.into_iter().map(|(b, _)| b).collect();
         let local = archive::local_backups(&self.paths, &self.settings)?;
+        let user = self.api.user_id()?.to_owned();
         for backup in &local {
-            let name = backup.remote_name();
-            let stem = name.trim_end_matches(".zip");
-            let known = remote.iter().any(|r| r.remote_name() == name);
-            if missing.iter().any(|v| v.as_str() == Some(stem)) || !known {
-                let bytes = archive::bytes(&self.paths, backup)?;
-                self.api
-                    .post(&["backup", &encoded(&name)], Body::Binary(bytes))
-                    .await?;
-                let mut r = backup.clone();
-                r.remote = true;
-                remote.push(r);
+            let game = self
+                .snapshot
+                .installation
+                .accounts
+                .iter()
+                .find(|a| core::same_account(&a.protocol_name(), &backup.account))
+                .map(|a| a.game);
+            let Some(game) = game else { continue };
+            if remote
+                .iter()
+                .any(|r| r.remote_name() == backup.remote_name())
+            {
+                continue;
             }
+            let record = backup_record(&user, backup, game);
+            let slot = self
+                .api
+                .post(
+                    &format!("{BACKEND}/backups/uploads"),
+                    json!({
+                        "userId": record["userId"],
+                        "backupId": record["backupId"],
+                        "type": record["type"],
+                        "timestamp": record["timestamp"],
+                    }),
+                )
+                .await?;
+            let url = slot["url"].as_str().context(msg!(InvalidResponse))?;
+            let bytes = archive::bytes(&self.paths, backup)?;
+            self.api.upload(url, bytes).await?;
+            self.api.post(&format!("{BACKEND}/backups"), record).await?;
+            let mut r = backup.clone();
+            r.remote = true;
+            remote.push(r);
         }
         self.snapshot.backups = local;
         merge_backups(&mut self.snapshot.backups, remote);
@@ -593,24 +628,27 @@ impl Engine {
     async fn sync(&mut self) -> Result<Text> {
         self.api.ensure_session().await?;
         self.inspect()?;
-        let status = self.fetch_status().await?;
+        let (feed, regions) = self.fetch_status().await?;
         let mut warnings = Vec::new();
         self.backup_due(false, false)?;
         if self.settings.auto_addons && !wow::running() {
             warnings.extend(self.update_addons().await?);
         }
         self.refresh_backups()?;
-        let targets = sync_targets(&status, &self.snapshot.installation)?;
+        let targets = sync_targets(
+            &feed,
+            &regions,
+            &self.user_realms,
+            &self.snapshot.installation.games,
+        )?;
         ensure!(!targets.is_empty(), msg!(NoSyncRealms));
         let mut data = self.app_data()?;
         let changed = self.apply_prices(targets, &mut data).await?;
-        self.write_app_info(&status["appInfo"], data)?;
+        self.write_app_info(&feed.app_info, data)?;
         if let Err(e) = self.sync_backups().await {
             warnings.push(msg!(CloudWarning, error = Text::from_error(&e)));
         }
-        if self.settings.share_data {
-            warnings.extend(self.upload_accounting().await);
-        }
+        // ponytail: accounting upload (the share_data setting) is not ported yet: spec §6, sv-snapshots.
         if let Some(catalog) = &self.snapshot.auction {
             let selected = catalog.selected.clone();
             if let Err(error) = self.load_auction(selected.as_ref()) {
@@ -619,23 +657,45 @@ impl Engine {
         }
         Ok(self.finish_sync(changed, warnings, Utc::now().timestamp()))
     }
-    /// Realm catalog, subscriptions, channels, latest addon versions and news.
-    async fn fetch_status(&mut self) -> Result<Value> {
-        let realm_list = self.api.get(&["realms2", "list"]).await?;
-        self.snapshot.realms = realm_options(&realm_list)?;
-        let version = self
-            .snapshot
-            .installation
-            .addons
-            .iter()
-            .find(|a| a.name == "TradeSkillMaster" && a.game == Game::Retail)
-            .and_then(|a| a.version.as_deref());
-        let status = self.api.status(&self.settings.channel, version).await?;
-        self.snapshot.registered_realms = registered_realms(&self.snapshot.realms, &status)?;
-        self.snapshot.channels = channels(&status)?;
-        self.snapshot.latest = latest_versions(&status)?;
-        self.snapshot.news = strip_html(status["appInfo"]["news"].as_str().unwrap_or(""));
-        Ok(status)
+    /// Realm catalog, subscriptions and the socket feed with prices, addons and news.
+    async fn fetch_status(&mut self) -> Result<(Feed, Value)> {
+        let realms = self.api.get(&format!("{REALM_API}/realms")).await?;
+        let regions = self.api.get(&format!("{REALM_API}/regions")).await?;
+        self.snapshot.realms = realm_options(&realms)?;
+        self.refresh_user_realms().await?;
+        let feed = self.api.feed().await?;
+        self.apply_feed_info(&feed);
+        Ok((feed, regions))
+    }
+    async fn refresh_user_realms(&mut self) -> Result<()> {
+        let list = self
+            .api
+            .get(&format!(
+                "{BACKEND}/user-realms?userIds={}",
+                self.api.user_id()?
+            ))
+            .await?;
+        self.user_realms = user_realms(&self.snapshot.realms, &list);
+        self.snapshot.registered_realms = self.user_realms.iter().map(|(r, _)| r.clone()).collect();
+        Ok(())
+    }
+    /// Channels from the account, the selected channel's addon versions and the news.
+    fn apply_feed_info(&mut self, feed: &Feed) {
+        self.snapshot.channels = self.api.channels();
+        self.snapshot.latest.clear();
+        self.addon_urls.clear();
+        for addon in &feed.addons {
+            if let (Some(name), Some(version), Some(url), true) = (
+                addon["addon"].as_str(),
+                addon["version"].as_str(),
+                addon["url"].as_str(),
+                addon["channel"].as_str() == Some(self.settings.channel.as_str()),
+            ) {
+                self.snapshot.latest.insert(name.into(), version.into());
+                self.addon_urls.insert(name.into(), url.into());
+            }
+        }
+        self.snapshot.news = news(&feed.app_info);
     }
     /// Backs up first, then installs every outdated addon. Failures become warnings.
     async fn update_addons(&mut self) -> Result<Vec<Text>> {
@@ -697,14 +757,11 @@ impl Engine {
                 continue;
             };
             let mut error = None;
-            for (kind, info) in &target.strings {
-                let timestamp = info["lastModified"]
-                    .as_i64()
-                    .context(msg!(MissingPriceTime))?;
+            for (kind, (timestamp, url)) in &target.strings {
+                let timestamp = *timestamp;
                 if !core::price_update_due(timestamp, appdata.last(kind, &target.name)) {
                     continue;
                 }
-                let url = info["url"].as_str().context(msg!(MissingPriceUrl))?;
                 if !downloads.contains_key(url) {
                     match self.api.download(url).await {
                         Ok(text) => {
@@ -750,29 +807,12 @@ impl Engine {
         data: BTreeMap<Game, (PathBuf, AppData)>,
     ) -> Result<()> {
         let now = Utc::now().timestamp();
-        let info = format!(
-            "{{version={PROTOCOL_VERSION},lastSync={now},message={},news={}}}",
-            lua_message(&app_info["addonMessage"]),
-            lua_message(&app_info["addonNews"])
-        );
+        let info = app_info_lua(app_info, now);
         for (path, mut appdata) in data.into_values() {
-            appdata.update("APP_INFO", "Global", &info, now, true)?;
+            appdata.update("APP_INFO", "Global", &info, now, false)?;
             appdata.save(&self.settings.wow_path, &path)?;
         }
         Ok(())
-    }
-    async fn upload_accounting(&self) -> Vec<Text> {
-        let mut warnings = Vec::new();
-        for account in &self.snapshot.installation.accounts {
-            if let Err(e) = uploads::upload(&self.api, account, &self.settings.system_id).await {
-                warnings.push(msg!(
-                    UploadWarning,
-                    game = account.game.label(),
-                    error = Text::from_error(&e)
-                ));
-            }
-        }
-        warnings
     }
     fn finish_sync(&mut self, changed: usize, warnings: Vec<Text>, now: i64) -> Text {
         let failures: Vec<_> = self
@@ -806,12 +846,46 @@ impl Engine {
         }
     }
 }
-fn lua_message(value: &Value) -> String {
+/// The `APP_INFO` table the addon loads: `message` and an array of `news` entries.
+/// `lua::quote` escapes quotes, backslashes and control characters, and `AppData::update`
+/// picks a long-bracket level that the text cannot terminate.
+fn app_info_lua(app_info: &Value, now: i64) -> String {
+    let news: Vec<_> = app_info["news"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|item| {
+            format!(
+                "{{title={},content={},timestamp={},link={}}}",
+                lua::quote(item["title"].as_str().unwrap_or("")),
+                lua::quote(item["content"].as_str().unwrap_or("")),
+                item["timestamp"].as_i64().unwrap_or(0),
+                lua::quote(item["link"].as_str().unwrap_or(""))
+            )
+        })
+        .collect();
     format!(
-        "{{id={},msg={}}}",
-        value["id"].as_i64().unwrap_or(0),
-        lua::quote(value["msg"].as_str().unwrap_or(""))
+        "{{version={},lastSync={now},message={{id={},msg={}}},news={{{}}}}}",
+        lua::quote(env!("CARGO_PKG_VERSION")),
+        app_info["message"]["id"].as_i64().unwrap_or(0),
+        lua::quote(app_info["message"]["msg"].as_str().unwrap_or("")),
+        news.join(",")
     )
+}
+fn news(app_info: &Value) -> String {
+    app_info["news"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|item| {
+            format!(
+                "{}\n{}",
+                item["title"].as_str().unwrap_or(""),
+                strip_html(item["content"].as_str().unwrap_or(""))
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 pub fn strip_html(s: &str) -> String {
     let mut in_tag = false;
@@ -829,87 +903,92 @@ pub fn strip_html(s: &str) -> String {
         })
         .collect()
 }
-fn channels(status: &Value) -> Result<Vec<String>> {
-    Ok(status["channels"]
-        .as_object()
-        .context(msg!(MissingChannels))?
-        .keys()
-        .cloned()
-        .collect())
+/// The API sends ids as numbers.
+fn id_string(value: &Value) -> Option<String> {
+    value
+        .as_str()
+        .map(str::to_owned)
+        .or_else(|| value.as_i64().map(|x| x.to_string()))
 }
-fn latest_versions(status: &Value) -> Result<BTreeMap<String, String>> {
-    status["addons"]
-        .as_array()
-        .context(msg!(MissingAddonsResponse))?
-        .iter()
-        .map(|addon| {
-            Ok((
-                addon["name"]
-                    .as_str()
-                    .context(msg!(MissingAddonName))?
-                    .into(),
-                addon["version_str"]
-                    .as_str()
-                    .context(msg!(MissingAddonVersion))?
-                    .into(),
-            ))
-        })
-        .collect()
-}
-/// The versions whose realms are subscribed through the account, with their status key.
-fn subscribable() -> impl Iterator<Item = (Game, &'static str)> {
-    Game::ALL
-        .into_iter()
-        .filter(|game| game.subscribable())
-        .filter_map(|game| Some((game, game.status_keys()?.0)))
-}
-fn registered_realms(realms: &[Realm], status: &Value) -> Result<Vec<Realm>> {
-    let mut registered = Vec::new();
-    for (game, key) in subscribable() {
-        let entries = status[key].as_array().context(msg!(MissingSubscriptions))?;
-        registered.extend(
-            realms
-                .iter()
-                .filter(|realm| {
-                    realm.game == game
-                        && entries.iter().any(|entry| {
-                            entry["name"].as_str() == Some(realm.name.as_str())
-                                && entry["region"].as_str() == Some(realm.region.as_str())
-                        })
-                })
-                .cloned(),
-        );
+/// Auction house type of the realm API (`All`) and of the socket and user realms (`ALL`).
+fn faction(auction_house: &str) -> Option<Faction> {
+    match auction_house.to_ascii_lowercase().as_str() {
+        "alliance" => Some(Faction::Alliance),
+        "horde" => Some(Faction::Horde),
+        _ => None,
     }
-    Ok(registered)
 }
-fn realm_options(value: &Value) -> Result<Vec<Realm>> {
+fn auction_house(faction: Option<Faction>) -> &'static str {
+    match faction {
+        Some(Faction::Alliance) => "ALLIANCE",
+        Some(Faction::Horde) => "HORDE",
+        None => "ALL",
+    }
+}
+/// Game and AppData region key (`Fresh-EU`) of a realm API region.
+fn region_key(region: &Value) -> Option<(Game, String)> {
+    let (game, prefix) = Game::from_version(region["gameVersion"].as_str()?)?;
+    Some((
+        game,
+        format!(
+            "{prefix}{}",
+            region["regionPrefix"].as_str()?.to_uppercase()
+        ),
+    ))
+}
+/// One entry per realm and auction house. Factions of the classic versions are separate
+/// entries named `Realm-Alliance`/`Realm-Horde`, like their AppData keys.
+fn realm_options(list: &Value) -> Result<Vec<Realm>> {
     let mut realms = Vec::new();
-    for (game, _) in subscribable() {
-        for realm in value[game.protocol()]
-            .as_array()
-            .context(msg!(InvalidRealmList))?
-        {
-            let id = realm["id"]
-                .as_str()
-                .map(str::to_owned)
-                .or_else(|| realm["id"].as_i64().map(|x| x.to_string()))
-                .context(msg!(MissingRealmId))?;
+    for realm in list["items"].as_array().context(msg!(InvalidRealmList))? {
+        let Some((game, region)) = region_key(&realm["region"]) else {
+            continue;
+        };
+        let id = id_string(&realm["realmId"]).context(msg!(MissingRealmId))?;
+        let name = realm["localizedName"]
+            .as_str()
+            .context(msg!(MissingRealmName))?;
+        for house in realm["auctionHouses"].as_array().into_iter().flatten() {
+            let name = match faction(house["type"].as_str().unwrap_or("")) {
+                Some(faction) => format!("{name}-{}", faction_name(faction)),
+                None => name.to_owned(),
+            };
             realms.push(Realm {
                 game,
-                id,
-                region: realm["region"]
-                    .as_str()
-                    .context(msg!(MissingRealmRegion))?
-                    .into(),
-                name: realm["name"]
-                    .as_str()
-                    .context(msg!(MissingRealmName))?
-                    .into(),
+                id: id.clone(),
+                region: region.clone(),
+                name,
             });
         }
     }
     realms.sort_by_key(ToString::to_string);
     Ok(realms)
+}
+fn faction_name(faction: Faction) -> &'static str {
+    match faction {
+        Faction::Alliance => "Alliance",
+        Faction::Horde => "Horde",
+    }
+}
+/// The catalog realm of a realm id and auction house type.
+fn find_realm<'a>(realms: &'a [Realm], id: &Value, auction_house: &Value) -> Option<&'a Realm> {
+    let id = id_string(id)?;
+    let faction = faction(auction_house.as_str()?);
+    realms.iter().find(|realm| {
+        realm.id == id && core::realm_name_and_faction(realm.game, &realm.name).1 == faction
+    })
+}
+/// Subscribed catalog realms with their subscription record ids.
+fn user_realms(realms: &[Realm], list: &Value) -> Vec<(Realm, String)> {
+    list["items"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            let realm = find_realm(realms, &item["realmId"], &item["auctionHouseType"])?;
+            Some((realm.clone(), item["id"].as_str()?.to_owned()))
+        })
+        .collect()
 }
 #[derive(Debug)]
 struct Target {
@@ -918,83 +997,132 @@ struct Target {
     region: String,
     region_only: bool,
     removable: bool,
-    strings: BTreeMap<String, Value>,
+    /// String type to (`lastModified`, URL).
+    strings: BTreeMap<String, (i64, String)>,
 }
-fn sync_targets(status: &Value, installation: &Installation) -> Result<Vec<Target>> {
+/// The price strings of one socket event kind, for the events accepted by `matches`.
+fn price_strings(
+    events: &[Value],
+    matches: impl Fn(&Value) -> bool,
+) -> Result<BTreeMap<String, (i64, String)>> {
+    events
+        .iter()
+        .filter(|event| matches(event))
+        .map(|event| {
+            // `lastModified` is a number or a string.
+            let time = event["lastModified"]
+                .as_i64()
+                .or_else(|| event["lastModified"].as_str()?.parse().ok())
+                .context(msg!(MissingPriceTime))?;
+            Ok((
+                event["stringType"]
+                    .as_str()
+                    .context(msg!(MissingPriceUrl))?
+                    .to_owned(),
+                (
+                    time,
+                    event["url"].as_str().context(msg!(MissingPriceUrl))?.into(),
+                ),
+            ))
+        })
+        .collect()
+}
+/// A row per subscribed realm, then one per region the socket sent data for.
+fn sync_targets(
+    feed: &Feed,
+    regions: &Value,
+    subscribed: &[(Realm, String)],
+    games: &[Game],
+) -> Result<Vec<Target>> {
     let mut result = Vec::new();
-    for &game in &installation.games {
-        let Some((realms_key, regions_key)) = game.status_keys() else {
+    let catalog: Vec<_> = subscribed.iter().map(|(realm, _)| realm.clone()).collect();
+    for (realm, _) in subscribed.iter().filter(|(r, _)| games.contains(&r.game)) {
+        let strings = price_strings(&feed.realms, |event| {
+            find_realm(&catalog, &event["realmId"], &event["auctionHouseType"]) == Some(realm)
+        })?;
+        result.push(Target {
+            game: realm.game,
+            name: realm.name.clone(),
+            region: realm.region.clone(),
+            region_only: false,
+            removable: true,
+            strings,
+        });
+    }
+    for region in regions["items"].as_array().into_iter().flatten() {
+        let Some((game, key)) = region_key(region) else {
             continue;
         };
-        // Unsubscribable versions sync the realms the local SavedVariables mention.
-        let active = if game.subscribable() {
-            Vec::new()
-        } else {
-            wow::active_realms(&installation.accounts, game)?
-        };
-        for (key, region_only) in [(realms_key, false), (regions_key, true)] {
-            for entry in status[key].as_array().context(msg!(MissingStatusRealms))? {
-                let name = entry["name"].as_str().context(msg!(MissingSyncName))?;
-                let region = entry["region"].as_str().unwrap_or(name);
-                if !game.subscribable() {
-                    let played = if region_only {
-                        active
-                            .iter()
-                            .any(|(r, _)| name.split('-').nth(1) == Some(r.as_str()))
-                    } else {
-                        active.iter().any(|(r, n)| region.ends_with(r) && n == name)
-                    };
-                    if !played {
-                        continue;
-                    }
-                }
-                // PHP encodes an empty map as `[]`; a realm without data just syncs nothing.
-                let strings = match &entry["appDataStrings"] {
-                    Value::Object(map) => map.clone().into_iter().collect(),
-                    Value::Null => BTreeMap::new(),
-                    Value::Array(list) if list.is_empty() => BTreeMap::new(),
-                    _ => bail!(msg!(MissingAppDataStrings)),
-                };
-                result.push(Target {
-                    game,
-                    name: name.into(),
-                    region: region.into(),
-                    region_only,
-                    removable: core::can_remove_realm(game, region, region_only),
-                    strings,
-                });
-            }
+        let id = id_string(&region["regionId"]);
+        let strings = price_strings(&feed.regions, |event| id_string(&event["regionId"]) == id)?;
+        if games.contains(&game) && !strings.is_empty() {
+            result.push(Target {
+                game,
+                name: key.clone(),
+                region: key,
+                region_only: true,
+                removable: false,
+                strings,
+            });
         }
     }
     Ok(result)
 }
-fn remote_backups(info: &Value) -> Result<Vec<Backup>> {
+/// Backups this app uploaded carry this description. The official app's cloud backups are
+/// JSON patches of the parsed SavedVariables, which are not zips and cannot be restored here.
+const BACKUP_MARKER: &str = "Tradewind backup";
+/// The cloud record of a full (`original`) backup zip. `gameVersion` is the WoW folder.
+// ponytail: field names follow the official app's upload and restore code; the server is unverified.
+fn backup_record(user: &str, backup: &Backup, game: Game) -> Value {
+    let time = Utc
+        .timestamp_opt(backup.timestamp, 0)
+        .single()
+        .unwrap_or_default();
+    json!({
+        "userId": user,
+        "type": "original",
+        "backupId": backup.remote_name().trim_end_matches(".zip"),
+        "previousId": null,
+        "gameVersion": game.folder(),
+        "account": backup.account,
+        "systemId": backup.system_id,
+        "description": BACKUP_MARKER,
+        "timestamp": time.to_rfc3339_opts(SecondsFormat::Millis, true),
+    })
+}
+/// Cloud backups made by this app with their download URL.
+// ponytail: only the first page of `items` is read; `metadata` paging is unverified.
+fn remote_backups(list: &Value) -> Result<Vec<(Backup, String)>> {
     let mut result = Vec::new();
-    for (key, list) in info["data"].as_object().context(msg!(MissingCloudData))? {
-        let (system, account) = key.split_once('_').context(msg!(InvalidCloudKey))?;
-        core::BackupId {
+    for item in list["items"].as_array().context(msg!(MissingCloudData))? {
+        if !item["description"]
+            .as_str()
+            .is_some_and(|d| d.starts_with(BACKUP_MARKER))
+        {
+            continue;
+        }
+        let (Some(account), Some(system), Some(url)) = (
+            item["account"].as_str(),
+            item["systemId"].as_str(),
+            item["url"].as_str(),
+        ) else {
+            continue;
+        };
+        let timestamp = item["timestamp"]
+            .as_str()
+            .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
+            .context(msg!(MissingCloudTime))?
+            .timestamp();
+        let backup = Backup {
             account: account.into(),
             system_id: system.into(),
-            timestamp: 1,
-        }
-        .validate()?;
-        for item in list.as_array().context(msg!(InvalidCloudList))? {
-            let timestamp = item["timestamp"].as_i64().context(msg!(MissingCloudTime))?;
-            core::BackupId {
-                account: account.into(),
-                system_id: system.into(),
-                timestamp,
-            }
-            .validate()?;
-            result.push(Backup {
-                account: account.into(),
-                system_id: system.into(),
-                timestamp,
-                local: None,
-                remote: true,
-                keep: item["keep"].as_bool().unwrap_or(false),
-            });
-        }
+            timestamp,
+            local: None,
+            remote: true,
+            keep: false,
+        };
+        backup.id().validate()?;
+        result.push((backup, url.to_owned()));
     }
     Ok(result)
 }
@@ -1060,63 +1188,190 @@ mod tests {
         assert_eq!(engine.snapshot.last_sync, Some(300));
     }
 
-    #[test]
-    fn status_cloud_and_realm_fixtures_cover_all_game_variants() {
-        let root = tempfile::tempdir().unwrap();
-        for game in Game::ALL {
-            let path = root
-                .path()
-                .join(game.folder())
-                .join("WTF/Account/ACCOUNT/SavedVariables");
-            fs::create_dir_all(&path).unwrap();
-            fs::write(
-                path.join("TradeSkillMaster.lua"),
-                include_str!("../../tests/fixtures/savedvariables.lua"),
-            )
-            .unwrap();
-            fs::write(
-                path.join("TradeSkillMaster_AppHelper.lua"),
-                include_str!("../../tests/fixtures/helper.lua"),
-            )
-            .unwrap();
+    fn feed() -> Feed {
+        let mut feed = Feed::default();
+        for packet in
+            crate::adapters::tsm::packets(include_str!("../../tests/fixtures/socket-poll.txt"))
+        {
+            if let crate::adapters::tsm::Packet::Event(name, payload) = packet {
+                feed.absorb(&name, payload);
+            }
         }
-        let status: Value =
-            serde_json::from_str(include_str!("../../tests/fixtures/status.json")).unwrap();
-        assert_eq!(channels(&status).unwrap(), vec!["beta", "release"]);
-        assert!(
-            latest_versions(&status)
-                .unwrap()
-                .contains_key("TradeSkillMaster")
-        );
-        let targets = sync_targets(&status, &wow::scan(root.path()).unwrap()).unwrap();
-        assert_eq!(targets.len(), 7);
-        assert_eq!(targets.iter().filter(|t| t.removable).count(), 2);
-        assert!(
-            targets
+        feed
+    }
+    fn catalog() -> Vec<Realm> {
+        realm_options(
+            &serde_json::from_str(include_str!("../../tests/fixtures/realms-v2.json")).unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn realm_catalog_names_regions_and_factions_follow_the_appdata_keys() {
+        let realms = catalog();
+        let key = |game, name: &str| {
+            realms
                 .iter()
-                .any(|t| t.game == Game::Anniversary && t.name == "Test Realm-Alliance")
+                .find(|r| r.game == game && r.name == name)
+                .map(|r| (r.region.as_str(), r.id.as_str()))
+        };
+        assert_eq!(key(Game::Retail, "Blackrock"), Some(("EU", "275")));
+        assert_eq!(
+            key(Game::ClassicEra, "Transcendence-Alliance"),
+            Some(("Classic-EU", "871"))
         );
+        assert_eq!(
+            key(Game::ClassicEra, "Transcendence-Horde"),
+            Some(("Classic-EU", "871"))
+        );
+        assert_eq!(
+            key(Game::ClassicEra, "Doomhowl-Horde"),
+            Some(("HC-US", "1808"))
+        );
+        assert_eq!(
+            key(Game::ClassicEra, "Penance (AU)-Alliance"),
+            Some(("SoD-US", "1059"))
+        );
+        assert_eq!(
+            key(Game::Anniversary, "Thunderstrike-Horde"),
+            Some(("Fresh-EU", "1809"))
+        );
+        assert_eq!(
+            key(Game::Progression, "Atiesh-Alliance"),
+            Some(("BCC-US", "665"))
+        );
+        assert_eq!(
+            key(Game::Forever, "Normal-Horde"),
+            Some(("Forever-EU", "1101"))
+        );
+        assert!(key(Game::Retail, "Blackrock-Horde").is_none());
+        assert_eq!(realms.len(), 2 + 2 * 6);
+    }
+
+    #[test]
+    fn socket_feed_becomes_realm_and_region_targets_for_installed_games_only() {
+        let realms = catalog();
         let list: Value =
-            serde_json::from_str(include_str!("../../tests/fixtures/realms.json")).unwrap();
-        assert_eq!(realm_options(&list).unwrap().len(), 2);
-        let retail =
-            realm_options(&json!({"retail":[{"id":42,"name":"Realm","region":"EU"}],"bcc":[]}))
-                .unwrap();
+            serde_json::from_str(include_str!("../../tests/fixtures/user-realms.json")).unwrap();
+        let subscribed = user_realms(&realms, &list);
+        assert_eq!(subscribed.len(), 1);
+        assert_eq!(subscribed[0].0.name, "Blackrock");
+        assert_eq!(subscribed[0].1, "usr_rlm_00000000000000000000000000");
+        let regions: Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/regions-v2.json")).unwrap();
+        let targets = sync_targets(
+            &feed(),
+            &regions,
+            &subscribed,
+            &[Game::Retail, Game::Forever],
+        )
+        .unwrap();
+        assert_eq!(targets.len(), 2);
         assert_eq!(
-            (retail[0].game, retail[0].id.as_str()),
-            (Game::Retail, "42")
+            (targets[0].name.as_str(), targets[0].region.as_str()),
+            ("Blackrock", "EU")
         );
-        let info: Value =
-            serde_json::from_str(include_str!("../../tests/fixtures/cloud.json")).unwrap();
-        let remote = remote_backups(&info).unwrap();
+        assert!(targets[0].removable && !targets[0].region_only);
+        assert_eq!(targets[0].strings.len(), 2);
+        // `lastModified` arrives as a number and as a string.
         assert_eq!(
-            remote[0].remote_name(),
+            targets[0].strings["AUCTIONDB_NON_COMMODITY_DATA"].0,
+            1793985712
+        );
+        assert_eq!(
+            targets[0].strings["AUCTIONDB_NON_COMMODITY_HISTORICAL"].0,
+            1793929249
+        );
+        assert!(
+            !targets[0].strings["AUCTIONDB_NON_COMMODITY_DATA"]
+                .1
+                .contains('?')
+        );
+        assert_eq!(
+            (
+                targets[1].name.as_str(),
+                targets[1].region_only,
+                targets[1].removable
+            ),
+            ("EU", true, false)
+        );
+        assert_eq!(targets[1].strings.len(), 1);
+        assert!(
+            sync_targets(&feed(), &regions, &subscribed, &[Game::Forever])
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn feed_info_gives_versions_urls_and_news_of_the_selected_channel() {
+        let root = tempfile::tempdir().unwrap();
+        let mut engine = engine(root.path(), Settings::default());
+        engine.apply_feed_info(&feed());
+        assert_eq!(engine.snapshot.latest["TradeSkillMaster"], "v4.15.3");
+        assert!(engine.addon_urls["TradeSkillMaster_AppHelper"].ends_with("AppHelper-v4.15.zip"));
+        assert!(engine.snapshot.news.starts_with("TSM 4.15 brings"));
+        engine.settings.channel = "beta".into();
+        engine.apply_feed_info(&feed());
+        assert!(engine.snapshot.latest.is_empty());
+    }
+
+    #[test]
+    fn app_info_is_a_string_table_with_escaped_text_and_a_news_array() {
+        let info = json!({"message":{"id":3,"msg":"say \"hi\"\n]]"},
+            "news":[{"title":"A\\B","content":"line]]\nbreak","timestamp":7,"link":"https://tradeskillmaster.com/x"},
+                    {"title":"T","content":"C","timestamp":8,"link":"L"}]});
+        let line = app_info_lua(&info, 99);
+        assert!(line.starts_with(&format!(
+            "{{version=\"{}\",lastSync=99,message={{id=3,msg=\"say \\\"hi\\\"\\010]]\"}}",
+            env!("CARGO_PKG_VERSION")
+        )));
+        assert!(line.contains("news={{title=\"A\\\\B\",content=\"line]]\\010break\",timestamp=7,link=\"https://tradeskillmaster.com/x\"},{title=\"T\""));
+        let mut data = AppData::default();
+        data.update("APP_INFO", "Global", &line, 99, false).unwrap();
+        let (_, _, _, body) = data.records().next().unwrap();
+        // `]]` inside the text forces a level-1 long bracket.
+        assert!(body.contains("[=[return {version="), "{body}");
+        assert!(body.ends_with("}]=])"));
+        assert_eq!(app_info_lua(&json!({}), 1).matches("news={}").count(), 1);
+    }
+
+    #[test]
+    fn cloud_backups_round_trip_through_the_records_this_app_uploads() {
+        let backup = Backup {
+            account: "ACCOUNT-Anniversary".into(),
+            system_id: "abc".into(),
+            timestamp: 1700000000,
+            local: None,
+            remote: false,
+            keep: false,
+        };
+        let record = backup_record("user", &backup, Game::Anniversary);
+        assert_eq!(record["backupId"], "abc_ACCOUNT-Anniversary_1700000000");
+        assert_eq!(record["gameVersion"], "_anniversary_");
+        assert_eq!(record["type"], "original");
+        assert_eq!(record["previousId"], Value::Null);
+        assert_eq!(record["timestamp"], "2023-11-14T22:13:20.000Z");
+        let mut listed: Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/cloud.json")).unwrap();
+        let remote = remote_backups(&listed).unwrap();
+        // The official app's patch records and url-less entries are not ours.
+        assert_eq!(remote.len(), 1);
+        assert_eq!(
+            remote[0].0.remote_name(),
             "abc_ACCOUNT-Anniversary_1700000000.zip"
         );
-        let mut invalid = info.clone();
-        invalid["data"]["abc_ACCOUNT-Anniversary"][0]["timestamp"] = json!(-1);
-        assert!(remote_backups(&invalid).is_err());
-        assert!(remote_backups(&json!({"data":{"abc_../ACCOUNT":[]}})).is_err());
+        assert!(
+            remote[0]
+                .1
+                .starts_with("https://tradeskillmaster.nyc3.digitaloceanspaces.com/")
+        );
+        listed["items"][0]["timestamp"] = json!("yesterday");
+        assert!(remote_backups(&listed).is_err());
+        listed["items"][0]["timestamp"] = json!("2023-11-14T22:13:20.000Z");
+        listed["items"][0]["account"] = json!("../ACCOUNT");
+        assert!(remote_backups(&listed).is_err());
+        assert!(remote_backups(&json!({"metadata":{}})).is_err());
     }
 
     #[tokio::test]
@@ -1149,20 +1404,17 @@ mod tests {
     }
 
     #[test]
-    fn subscriptions_are_scoped_by_game_region_and_faction_before_any_file_sync() {
+    fn subscriptions_are_scoped_by_game_region_and_faction() {
         let catalog = realms();
-        let status = json!({"realms":[{"name":"Pyrewood Village","region":"US"}],
-            "realms-Progression":[{"name":"Pyrewood Village-Alliance","region":"EU"}]});
-        let registered = registered_realms(&catalog, &status).unwrap();
-        assert_eq!(registered, vec![catalog[4].clone(), catalog[0].clone()]);
         let snapshot = Snapshot {
-            registered_realms: registered,
+            registered_realms: vec![catalog[4].clone(), catalog[0].clone()],
             ..Default::default()
         };
         assert!(snapshot.realm_registered(&catalog[0]));
         assert!(!snapshot.realm_registered(&catalog[1]));
         assert!(!snapshot.realm_registered(&catalog[2]));
         assert!(!snapshot.realm_registered(&catalog[3]));
+        assert!(snapshot.realm_registered(&catalog[4]));
     }
 
     #[tokio::test]
@@ -1189,7 +1441,6 @@ mod tests {
         fs::create_dir(dir.path().join("_retail_")).unwrap();
         let settings = Settings {
             wow_path: dir.path().into(),
-            legacy_http: true,
             ..Default::default()
         };
         let mut engine = engine(dir.path(), settings.clone());
@@ -1214,7 +1465,6 @@ mod tests {
         assert_eq!(reloaded.realm_filters, filters);
         assert_eq!(reloaded.language, LanguagePreference::German);
         assert_eq!(reloaded.retention_days, 7);
-        assert!(reloaded.legacy_http);
         let disk = fs::read_to_string(engine.paths.config.join("settings.json")).unwrap();
         assert!(disk.contains("\"horde\""));
         assert!(disk.contains("\"german\""));

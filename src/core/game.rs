@@ -34,7 +34,7 @@ impl Game {
             Self::Forever => "_forever_",
         }
     }
-    /// TSM's API name (`realms2/add/<protocol>/…`, market and favorite keys).
+    /// Stable name in settings, market and favorite keys.
     pub fn protocol(self) -> &'static str {
         match self {
             Self::Retail => "retail",
@@ -69,28 +69,23 @@ impl Game {
             Self::Anniversary => "-Anniversary",
         }
     }
-    /// TSM has no addon, accounts or price data for it yet: listed, but never scanned.
-    pub fn tsm_supported(self) -> bool {
-        self != Self::Forever
-    }
-    /// Realms are subscribed one by one through the TSM account. The other versions sync
-    /// whatever realms the local SavedVariables mention.
-    pub fn subscribable(self) -> bool {
-        matches!(self, Self::Retail | Self::Progression)
-    }
     /// Realm names end in `-Alliance`/`-Horde` (all versions but retail).
     pub fn faction_realms(self) -> bool {
         self != Self::Retail
     }
-    /// The status response's realm and region list keys.
-    pub fn status_keys(self) -> Option<(&'static str, &'static str)> {
-        match self {
-            Self::Retail => Some(("realms", "regions")),
-            Self::Progression => Some(("realms-Progression", "regions-Progression")),
-            Self::ClassicEra => Some(("extraClassicRealms", "extraClassicRegions")),
-            Self::Anniversary => Some(("extraAnniversaryRealms", "extraAnniversaryRegions")),
-            Self::Forever => None,
-        }
+    /// The realm API's `gameVersion` as game and AppData region-key prefix. `None` for
+    /// versions without a key (e.g. Season of Mastery).
+    pub fn from_version(version: &str) -> Option<(Self, &'static str)> {
+        Some(match version {
+            "Retail" => (Self::Retail, ""),
+            "Wrath" => (Self::Progression, "BCC-"),
+            "Classic Era" => (Self::ClassicEra, "Classic-"),
+            "Classic Era - Hardcore" => (Self::ClassicEra, "HC-"),
+            "Season of Discovery" => (Self::ClassicEra, "SoD-"),
+            "Classic Era - Fresh" => (Self::Anniversary, "Fresh-"),
+            "Forever" => (Self::Forever, "Forever-"),
+            _ => return None,
+        })
     }
 }
 impl std::fmt::Display for Game {
@@ -112,6 +107,27 @@ mod tests {
             assert_eq!(serde_json::from_str::<Game>(&json).unwrap(), game);
         }
         assert_eq!(Game::from_folder("_ptr_"), None);
-        assert!(Game::Forever.status_keys().is_none() && !Game::Forever.tsm_supported());
+        assert_eq!(Game::from_version("Retail"), Some((Game::Retail, "")));
+        assert_eq!(
+            Game::from_version("Wrath"),
+            Some((Game::Progression, "BCC-"))
+        );
+        assert_eq!(
+            Game::from_version("Classic Era - Hardcore"),
+            Some((Game::ClassicEra, "HC-"))
+        );
+        assert_eq!(
+            Game::from_version("Season of Discovery"),
+            Some((Game::ClassicEra, "SoD-"))
+        );
+        assert_eq!(
+            Game::from_version("Classic Era - Fresh"),
+            Some((Game::Anniversary, "Fresh-"))
+        );
+        assert_eq!(
+            Game::from_version("Forever"),
+            Some((Game::Forever, "Forever-"))
+        );
+        assert_eq!(Game::from_version("Season of Mastery"), None);
     }
 }

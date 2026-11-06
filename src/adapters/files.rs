@@ -25,7 +25,6 @@ pub enum Appearance {
 #[serde(default)]
 pub struct Settings {
     pub wow_path: PathBuf,
-    pub email: String,
     pub channel: String,
     pub auto_sync: bool,
     pub auto_addons: bool,
@@ -41,7 +40,6 @@ pub struct Settings {
     pub system_id: String,
     pub terms_accepted: bool,
     pub remember_login: bool,
-    pub legacy_http: bool,
     pub realm_filters: crate::core::RealmFilters,
     pub auction_favorites: Vec<crate::core::auction::Favorite>,
 }
@@ -53,7 +51,6 @@ impl Default for Settings {
         let hash = format!("{:x}", Sha256::digest(machine.as_bytes()));
         Self {
             wow_path: PathBuf::new(),
-            email: String::new(),
             channel: "release".into(),
             auto_sync: true,
             auto_addons: true,
@@ -68,7 +65,6 @@ impl Default for Settings {
             system_id: hash[..12].into(),
             terms_accepted: false,
             remember_login: false,
-            legacy_http: false,
             realm_filters: crate::core::RealmFilters::default(),
             auction_favorites: Vec::new(),
         }
@@ -348,7 +344,6 @@ mod settings_tests {
         fs::write(root.path().join("settings.json"), b"{}").unwrap();
         let loaded = paths.load().unwrap();
         assert!(!loaded.remember_login);
-        assert!(!loaded.legacy_http);
         assert_eq!(loaded.backup_hours, 1);
     }
 

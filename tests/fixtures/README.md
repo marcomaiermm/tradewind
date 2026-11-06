@@ -1,13 +1,17 @@
 # Compatibility fixtures
 
-All data here is synthetic, derived from the observed format contracts. Nothing
-is a recorded server response and nothing contains personal data.
-`tools/generate_fixtures.py` regenerates the files deterministically.
+Most data here is synthetic, derived from the observed format contracts, and
+contains no personal data. `tools/generate_fixtures.py` regenerates those files
+deterministically. The files marked *recorded* are excerpts of live responses of
+the TSM desktop app's API with presigned URL queries removed and the user id
+replaced.
 
 | Files | Covers |
 |---|---|
-| `protocol.json` | Legacy version, time signature, Base64, gzip JSON, binary request envelopes, HTTP/HTTPS API selection with a fixed HTTPS OAuth URL, CDN host with synthetic path and query |
-| `status.json`, `realms.json`, `cloud.json` | Channel object, four game versions, realm selection, cloud names |
+| `realms-v2.json`, `regions-v2.json`, `user-realms.json` | *Recorded.* Realm API and subscription excerpts: every game version, faction auction houses, numeric ids |
+| `socket-poll.txt` | *Recorded.* Engine.IO polling packets (`\x1e`-joined): ping, `realm_auctiondb` and `region_auctiondb` with numeric and string `lastModified`, `addon`, `app_info` |
+| `claims.json` | *Recorded.* Access token claims of a free account |
+| `cloud.json` | Cloud backup list: this app's records, an official-app patch record, one without a URL |
 | `savedvariables.lua`, `helper.lua`, `appdata.lua` | Lua escapes, numeric tables, scopes, helper region, preserving existing AppData |
 | `scan.json`, `scan-wire.json` | Checksum, scan age, legacy filtering |
 | `accounting-wire.json` | Sales/buy/expired/cancelled, cursor filter, seven protocol columns |

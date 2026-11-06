@@ -1,0 +1,16 @@
+{
+ "items": [
+  {
+   "id": "usr_rlm_00000000000000000000000000",
+   "userId": "00000000-0000-4000-8000-000000000000",
+   "realmId": 275,
+   "auctionHouseType": "ALL"
+  }
+ ],
+ "metadata": {
+  "totalItems": 1,
+  "page": 1,
+  "pageSize": 1,
+  "totalPages": 1
+ }
+}

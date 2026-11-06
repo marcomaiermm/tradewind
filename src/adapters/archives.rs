@@ -90,7 +90,6 @@ pub fn install(root: &Path, game: Game, addon: &str, bytes: &[u8]) -> Result<()>
         ["TradeSkillMaster", "TradeSkillMaster_AppHelper"].contains(&addon),
         msg!(UnknownAddon)
     );
-    ensure!(!wow::running(), msg!(CloseWowUpdate));
     let dest = wow::addon_dir(root, game);
     within(root, &dest)?;
     fs::create_dir_all(&dest)?;
@@ -219,7 +218,6 @@ pub fn local_backups(paths: &Paths, settings: &Settings) -> Result<Vec<Backup>> 
     Ok(backups)
 }
 pub fn create(paths: &Paths, settings: &Settings, account: &Account, keep: bool) -> Result<Backup> {
-    ensure!(!wow::running(), msg!(CloseWowConsistentBackup));
     let name = account.protocol_name();
     ensure!(core::valid_account(&name), msg!(InvalidAccount));
     let files: Vec<_> = fs::read_dir(&account.path)?

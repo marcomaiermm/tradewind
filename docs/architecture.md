@@ -8,7 +8,7 @@ event-bus layer.
 |---|---|---|
 | `core` | Game versions (`Game`), backup identity, realm/addon rules, time and cursor decisions, accounting model, export kinds, auction filters and sorting | No Iced, HTTP, filesystem or system clock. Time values are passed in |
 | `application` | Actions, outcomes, snapshots, use cases and the central `Coordinator` | All business decisions outside the UI |
-| `adapters` | TSM/OAuth/HTTP, WoW/Lua, uploads, archives, XDG storage, keyring, desktop, CASC icons | External formats, IO, atomic writes, archive validation |
+| `adapters` | TSM/OIDC/REST/Socket.IO, WoW/Lua, archives, XDG storage, keyring, desktop, CASC icons | External formats, IO, atomic writes, archive validation |
 | `i18n` | Typed English/German messages and pure formatting | No global language, no IO |
 | `ui` | Iced state, forms, navigation, rendering | Sends actions, renders outcomes. Never touches network, Lua, archives or files directly |
 
@@ -29,8 +29,11 @@ close button does too when close-to-tray is off or no tray is available.
 Price sync runs every ten minutes while signed in with sync enabled. The local
 backup check has its own schedule and does not require a login. Failed attempts
 also advance the schedule to avoid hot retry loops. WoW itself does not honour
-the lock, so restore and addon installation additionally check for running WoW
-processes.
+the lock, so restore and backups additionally check for running WoW processes.
+Manual addon installation is allowed while WoW runs: WoW only reads addon files
+on login or `/reload`, and SavedVariables on disk only change then, so the
+backup taken before the install is the last saved state. Automatic updates
+during a sync still wait until WoW is closed.
 
 ## Desktop integration
 
@@ -79,9 +82,7 @@ backup. Safety backups are never deleted automatically.
 
 ## Versions
 
-`APP_VERSION` comes from Cargo. `adapters::tsm::PROTOCOL_VERSION = 41402` is the
-legacy wire contract and `APP_INFO` compatibility version. Releasing this app
-does not change it.
+`APP_VERSION` comes from Cargo.
 
 ## Internationalization
 

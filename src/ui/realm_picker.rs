@@ -71,7 +71,7 @@ pub(super) fn view<'a>(
         Message::RealmGame(None)
     )]
     .spacing(2);
-    for game in Game::ALL.into_iter().filter(|game| game.subscribable()) {
+    for game in Game::ALL {
         games = games.push(chip(
             game.label(),
             Some(identity::game_color(game)),

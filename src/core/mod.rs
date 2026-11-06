@@ -103,9 +103,6 @@ impl std::fmt::Display for Realm {
         write!(f, "{} · {} · {}", self.game, self.region, self.name)
     }
 }
-pub fn can_remove_realm(game: Game, region: &str, region_only: bool) -> bool {
-    !region_only && game.subscribable() && !["KR", "TW"].contains(&region)
-}
 #[derive(Clone, Debug)]
 pub struct Addon {
     pub game: Game,
@@ -117,10 +114,9 @@ impl Addon {
     pub fn update_available(&self, latest: &str) -> bool {
         !self.development
             && !latest.is_empty()
-            && self
-                .version
-                .as_ref()
-                .is_some_and(|version| latest != version)
+            && self.version.as_ref().is_some_and(|version| {
+                latest.trim_start_matches('v') != version.trim_start_matches('v')
+            })
     }
 }
 pub fn backup_due(now: i64, last: i64, modified: i64, interval_seconds: i64, force: bool) -> bool {
@@ -160,9 +156,6 @@ mod tests {
         assert!(price_update_due(43, 42));
         assert!(!backup_due(3600, 0, 0, 3600, false));
         assert!(backup_due(3600, 0, 1, 3600, false));
-        assert!(!can_remove_realm(Game::Retail, "KR", false));
-        assert!(!can_remove_realm(Game::ClassicEra, "EU", false));
-        assert!(can_remove_realm(Game::Progression, "EU", false));
         assert!(valid_account("ACCOUNT-BCC") && valid_account("ACCOUNT-Anniversary"));
         assert!(!valid_account("-Classic"));
         assert!(same_account("ACCOUNT-BCC", "ACCOUNT-Progression"));
@@ -179,6 +172,9 @@ mod tests {
         assert!(!addon.update_available("4.14.2"));
         addon.version = Some("4.14.1".into());
         assert!(addon.update_available("4.14.2"));
+        assert!(addon.update_available("v4.14.2"));
+        addon.version = Some("4.14.2".into());
+        assert!(!addon.update_available("v4.14.2"));
         addon.development = true;
         assert!(!addon.update_available("4.14.2"));
     }

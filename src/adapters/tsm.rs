@@ -1,24 +1,29 @@
-use crate::adapters::keyring;
+use crate::adapters::{desktop, keyring};
 use crate::i18n::Text;
 use anyhow::{Context, Result, bail, ensure};
-use base64::{Engine, engine::general_purpose::URL_SAFE};
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::Utc;
-use flate2::{Compression, read::GzDecoder, write::GzEncoder};
-use reqwest::{Client, Url};
-use serde_json::{Value, json};
+use flate2::read::GzDecoder;
+use reqwest::{Client, Method, Url, header};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
-    io::{Read, Write},
-    time::Duration,
+    io::{BufRead, BufReader, Read, Write},
+    net::TcpListener,
+    time::{Duration, Instant},
 };
 
-pub const PROTOCOL_VERSION: i64 = 41402;
-const TOKEN_URL: &str = "https://id.tradeskillmaster.com/realms/app/protocol/openid-connect/token";
-// Fixed protocol compatibility constant from AppAPI._make_request, not an account credential.
-const SIGNING_SALT: &str = "3FB1CC5EDC5B43F21CB8ACC23B42B703";
+pub const REALM_API: &str = "https://realm-api.tradeskillmaster.com/v2";
+pub const BACKEND: &str = "https://desktop-backend.tradeskillmaster.com";
+const AUTH: &str = "https://id.tradeskillmaster.com/realms/app/protocol/openid-connect";
+const SOCKET: &str = "https://app-backend-sockets.tradeskillmaster.com/socket.io/";
+const CLIENT_ID: &str = "desktop-app";
+const SCOPE: &str = "openid roles profile email tsm-profile offline_access";
+/// One keyring entry: the offline refresh token of the signed-in TSM account.
+const KEYRING_ACCOUNT: &str = "desktop-app";
 const MAX_BODY: usize = 128 * 1024 * 1024;
-// Additional price-data origin observed in the authenticated TSM status response.
-const PRICE_CDN_HOST: &str = "app-cdn.tradeskillmaster.xyz";
+const LOGIN_WAIT: Duration = Duration::from_secs(300);
+const CALLBACK_PAGE: &str = "<!doctype html><meta charset=utf-8><title>Tradewind</title><p>Signed in. You can close this tab and return to Tradewind.</p>";
 
 fn transport_error(operation: impl Into<Text>, error: reqwest::Error) -> anyhow::Error {
     let operation = operation.into();
@@ -93,32 +98,160 @@ fn transport_cause(error: &(dyn std::error::Error + 'static)) -> Option<Text> {
     None
 }
 
-pub fn encoded(s: &str) -> String {
-    URL_SAFE.encode(s.as_bytes())
+/// Price data and addon zips come from DigitalOcean Spaces, backups from presigned URLs.
+fn checked_url(url: &str) -> Result<Url> {
+    let url = Url::parse(url)?;
+    ensure!(
+        url.scheme() == "https"
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.port().is_none(),
+        msg!(InvalidDownloadUrl)
+    );
+    let host = url.host_str().context(msg!(MissingDownloadHost))?;
+    ensure!(
+        ["digitaloceanspaces.com", "tradeskillmaster.com"]
+            .iter()
+            .any(|domain| host == *domain
+                || host
+                    .strip_suffix(domain)
+                    .is_some_and(|rest| rest.ends_with('.'))),
+        msg!(DownloadHostRejected, host = host)
+    );
+    Ok(url)
 }
-pub fn signature(time: i64) -> String {
-    format!(
-        "{:x}",
-        Sha256::digest(format!("{PROTOCOL_VERSION}:{time}:{SIGNING_SALT}"))
-    )
+fn random_token() -> Result<String> {
+    let mut bytes = [0u8; 32];
+    std::fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
+    Ok(URL_SAFE_NO_PAD.encode(bytes))
 }
-pub enum Body {
-    Json(Value),
-    Text(String),
-    Binary(Vec<u8>),
-    GzippedJsonBinary(Value),
+/// Serves the browser's redirect to `/auth/callback` and returns its authorization code.
+fn await_callback(listener: TcpListener, state: &str) -> Result<String> {
+    listener.set_nonblocking(true)?;
+    let deadline = Instant::now() + LOGIN_WAIT;
+    while Instant::now() < deadline {
+        let mut stream = match listener.accept() {
+            Ok((stream, _)) => stream,
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(100));
+                continue;
+            }
+            Err(e) => return Err(e.into()),
+        };
+        stream.set_nonblocking(false)?;
+        stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+        let mut line = String::new();
+        // Browsers open speculative connections that never send a request.
+        if BufReader::new(&stream).read_line(&mut line).is_err() {
+            continue;
+        }
+        let target = line.split_whitespace().nth(1).unwrap_or("/");
+        let Ok(url) = Url::parse(&format!("http://localhost{target}")) else {
+            continue;
+        };
+        let (status, page) = if url.path() == "/auth/callback" {
+            ("200 OK", CALLBACK_PAGE)
+        } else {
+            ("404 Not Found", "")
+        };
+        let _ = write!(
+            stream,
+            "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{page}",
+            page.len()
+        );
+        if url.path() != "/auth/callback" {
+            continue;
+        }
+        let param = |name: &str| {
+            url.query_pairs()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value.into_owned())
+        };
+        ensure!(
+            param("state").as_deref() == Some(state),
+            msg!(LoginRejected)
+        );
+        return param("code").context(msg!(LoginRejected));
+    }
+    bail!(msg!(LoginTimeout))
 }
+/// Claims of a JWT access token. The signature is the server's business, not ours.
+fn claims(token: &str) -> Result<Value> {
+    let payload = token.split('.').nth(1).context(msg!(InvalidSession))?;
+    Ok(serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload)?)?)
+}
+
+/// One Engine.IO packet of a long-polling response, as far as the sync cares.
+#[derive(Debug, PartialEq)]
+pub enum Packet {
+    Ping,
+    /// Socket.IO connection refused, e.g. for a rejected token.
+    Refused,
+    Event(String, Value),
+}
+/// Packets of one polling response are joined by the record separator `\x1e`.
+pub fn packets(body: &str) -> Vec<Packet> {
+    body.split('\x1e')
+        .filter_map(|packet| {
+            if packet == "2" {
+                return Some(Packet::Ping);
+            }
+            if packet.starts_with("44") {
+                return Some(Packet::Refused);
+            }
+            let Value::Array(mut event) = serde_json::from_str(packet.strip_prefix("42")?).ok()?
+            else {
+                return None;
+            };
+            if event.len() < 2 {
+                return None;
+            }
+            let payload = event.swap_remove(1);
+            Some(Packet::Event(event[0].as_str()?.to_owned(), payload))
+        })
+        .collect()
+}
+/// What the socket pushes on connect: price strings, addon versions and the news.
+#[derive(Debug, Default)]
+pub struct Feed {
+    pub realms: Vec<Value>,
+    pub regions: Vec<Value>,
+    pub addons: Vec<Value>,
+    pub app_info: Value,
+    addon_seen: bool,
+}
+impl Feed {
+    pub fn absorb(&mut self, name: &str, payload: Value) {
+        match name {
+            "realm_auctiondb" | "realm_shopping" => self.realms.push(payload),
+            "region_auctiondb" => self.regions.push(payload),
+            "addon" => {
+                self.addon_seen = true;
+                if payload["isComplete"].as_bool() == Some(true) {
+                    self.addons.clear();
+                }
+                self.addons
+                    .extend(payload["data"].as_array().cloned().unwrap_or_default());
+            }
+            "app_info" => self.app_info = payload,
+            _ => (),
+        }
+    }
+    fn complete(&self) -> bool {
+        self.addon_seen && !self.app_info.is_null()
+    }
+}
+
 pub struct Api {
     client: Client,
-    pub user: Value,
-    oauth: Value,
+    access: String,
+    refresh: String,
+    claims: Value,
     expires: i64,
-    pub email: String,
     remember: bool,
-    legacy_http: bool,
 }
 impl Api {
-    pub fn new(legacy_http: bool) -> Result<Self> {
+    pub fn new() -> Result<Self> {
         let client = Client::builder()
             .user_agent(concat!("Tradewind/", env!("CARGO_PKG_VERSION")))
             .connect_timeout(Duration::from_secs(15))
@@ -127,252 +260,178 @@ impl Api {
             .build()?;
         Ok(Self {
             client,
-            user: json!({"session":"", "isPremium":false}),
-            oauth: Value::Null,
+            access: String::new(),
+            refresh: String::new(),
+            claims: Value::Null,
             expires: 0,
-            email: String::new(),
             remember: false,
-            legacy_http,
         })
     }
-    fn token_request(&self, form: &[(&str, &str)]) -> reqwest::RequestBuilder {
-        // Passwords and refresh tokens always go to the verified HTTPS identity endpoint.
-        self.client.post(TOKEN_URL).form(form)
-    }
     pub fn logged_in(&self) -> bool {
-        self.user["session"].as_str().is_some_and(|s| !s.is_empty())
+        !self.access.is_empty()
     }
     pub fn premium(&self) -> bool {
-        self.user["isPremium"].as_bool().unwrap_or(false)
+        self.claims["realm_access"]["roles"]
+            .as_array()
+            .is_some_and(|roles| {
+                roles
+                    .iter()
+                    .any(|r| matches!(r.as_str(), Some("premium-gold" | "premium-platinum")))
+            })
     }
-    pub async fn login(
-        &mut self,
-        email: String,
-        password: String,
-        remember: bool,
-    ) -> Result<Option<Text>> {
-        ensure!(
-            email.contains('@') && !password.is_empty(),
-            msg!(CredentialsRequired)
-        );
-        let form = [
-            ("username", email.as_str()),
-            ("password", password.as_str()),
-            ("client_id", "legacy-desktop-app"),
-            ("grant_type", "password"),
-            ("code", ""),
-            ("redirect_uri", ""),
-            ("scope", "openid"),
-        ];
+    pub fn user_id(&self) -> Result<&str> {
+        self.claims["sub"].as_str().context(msg!(InvalidSession))
+    }
+    /// `release` plus the channels this account may use.
+    pub fn channels(&self) -> Vec<String> {
+        let mut channels = vec!["release".to_owned()];
+        for role in self.claims["resource_access"]["app-addon-version"]["roles"]
+            .as_array()
+            .into_iter()
+            .flatten()
+        {
+            if let Some(name) = role.as_str().and_then(|r| r.strip_prefix("channel/"))
+                && !channels.iter().any(|c| c == name)
+            {
+                channels.push(name.to_owned());
+            }
+        }
+        channels
+    }
+    async fn token(&self, form: &[(&str, &str)], operation: Text, rejected: Text) -> Result<Value> {
         let response = self
-            .token_request(&form)
+            .client
+            .post(format!("{AUTH}/token"))
+            .form(form)
             .send()
             .await
-            .map_err(|e| transport_error(msg!(Authentication), e))?;
+            .map_err(|e| transport_error(operation, e))?;
         if matches!(response.status().as_u16(), 400 | 401 | 403) {
-            bail!(msg!(LoginRejected));
+            bail!(rejected);
         }
-        let response = response.error_for_status().map_err(|e| e.without_url())?;
-        let token = self.read_json(response).await?;
-        self.email = email;
+        self.read_json(response.error_for_status().map_err(|e| e.without_url())?)
+            .await
+    }
+    /// Browser sign-in: authorization code with PKCE, received on a one-shot loopback listener.
+    pub async fn login(&mut self, remember: bool) -> Result<Option<Text>> {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        // Keycloak accepts any port, but only the host `localhost` and this exact path.
+        let redirect = format!(
+            "http://localhost:{}/auth/callback",
+            listener.local_addr()?.port()
+        );
+        let (verifier, state) = (random_token()?, random_token()?);
+        let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(&verifier));
+        let url = Url::parse_with_params(
+            &format!("{AUTH}/auth"),
+            [
+                ("client_id", CLIENT_ID),
+                ("redirect_uri", &redirect),
+                ("state", &state),
+                ("response_mode", "query"),
+                ("response_type", "code"),
+                ("scope", SCOPE),
+                ("code_challenge", &challenge),
+                ("code_challenge_method", "S256"),
+            ],
+        )?;
+        tokio::task::spawn_blocking(move || desktop::open(url.as_str())).await??;
+        let code = tokio::task::spawn_blocking(move || await_callback(listener, &state)).await??;
+        let token = self
+            .token(
+                &[
+                    ("grant_type", "authorization_code"),
+                    ("client_id", CLIENT_ID),
+                    ("code", &code),
+                    ("redirect_uri", &redirect),
+                    ("code_verifier", &verifier),
+                ],
+                msg!(Authentication),
+                msg!(LoginRejected),
+            )
+            .await?;
         self.remember = remember;
-        self.apply_token(token).await?;
-        let warning = if remember {
-            let email = self.email.clone();
-            let token = self.oauth["refresh_token"]
-                .as_str()
-                .context(msg!(MissingRefreshToken))?
-                .to_owned();
-            tokio::task::spawn_blocking(move || keyring::store(&email, &token))
+        self.apply_token(token)?;
+        let token = self.refresh.clone();
+        Ok(if remember {
+            tokio::task::spawn_blocking(move || keyring::store(KEYRING_ACCOUNT, &token))
                 .await?
                 .err()
                 .map(|_| msg!(KeyringLoginWarning))
         } else {
-            let email = self.email.clone();
-            // Clear a refresh token from an earlier remembered login to this same account.
-            let _ = tokio::task::spawn_blocking(move || keyring::clear(&email)).await;
+            // Clear a refresh token from an earlier remembered login.
+            let _ = tokio::task::spawn_blocking(|| keyring::clear(KEYRING_ACCOUNT)).await;
             None
-        };
-        Ok(warning)
+        })
     }
-    async fn apply_token(&mut self, token: Value) -> Result<()> {
+    fn apply_token(&mut self, token: Value) -> Result<()> {
         let access = token["access_token"]
             .as_str()
-            .context(msg!(MissingAccessToken))?
-            .to_owned();
-        let user = self
-            .json(
-                &["auth"],
-                Some(Body::Json(json!({"token":access}))),
-                None,
-                None,
-            )
-            .await?;
-        ensure!(
-            user["session"].as_str().is_some_and(|s| !s.is_empty()),
-            msg!(InvalidSession)
-        );
+            .context(msg!(MissingAccessToken))?;
+        self.claims = claims(access)?;
+        self.access = access.to_owned();
+        if let Some(refresh) = token["refresh_token"].as_str() {
+            self.refresh = refresh.to_owned();
+        }
+        ensure!(!self.refresh.is_empty(), msg!(MissingRefreshToken));
         self.expires = Utc::now().timestamp() + token["expires_in"].as_i64().unwrap_or(300) - 30;
-        self.oauth = token;
-        self.user = user;
         Ok(())
     }
-    pub async fn resume(&mut self, email: String) -> Result<()> {
-        let lookup_email = email.clone();
-        let token = tokio::task::spawn_blocking(move || keyring::lookup(&lookup_email)).await??;
-        self.email = email;
+    pub async fn resume(&mut self) -> Result<()> {
+        self.refresh = tokio::task::spawn_blocking(|| keyring::lookup(KEYRING_ACCOUNT)).await??;
         self.remember = true;
-        self.oauth = json!({"refresh_token":token});
-        self.refresh().await
+        self.renew().await
     }
-    async fn refresh(&mut self) -> Result<()> {
-        let refresh = self.oauth["refresh_token"]
-            .as_str()
-            .context(msg!(SessionExpired))?
-            .to_owned();
-        let response = self
-            .token_request(&[
-                ("client_id", "legacy-desktop-app"),
-                ("grant_type", "refresh_token"),
-                ("refresh_token", refresh.as_str()),
-            ])
-            .send()
-            .await
-            .map_err(|e| transport_error(msg!(RefreshSession), e))?;
-        if matches!(response.status().as_u16(), 400 | 401 | 403) {
-            self.user = Value::Null;
-            bail!(msg!(SessionExpired));
-        }
+    async fn renew(&mut self) -> Result<()> {
         let token = self
-            .read_json(response.error_for_status().map_err(|e| e.without_url())?)
-            .await?;
-        self.apply_token(token).await?;
+            .token(
+                &[
+                    ("grant_type", "refresh_token"),
+                    ("client_id", CLIENT_ID),
+                    ("refresh_token", &self.refresh),
+                ],
+                msg!(RefreshSession),
+                msg!(SessionExpired),
+            )
+            .await
+            .inspect_err(|_| self.access.clear())?;
+        self.apply_token(token)?;
         if self.remember {
-            let email = self.email.clone();
-            let token = self.oauth["refresh_token"]
-                .as_str()
-                .context(msg!(RefreshTokenMissing))?
-                .to_owned();
-            tokio::task::spawn_blocking(move || keyring::store(&email, &token)).await??;
+            let token = self.refresh.clone();
+            tokio::task::spawn_blocking(move || keyring::store(KEYRING_ACCOUNT, &token)).await??;
         }
         Ok(())
     }
     pub async fn ensure_session(&mut self) -> Result<()> {
         ensure!(self.logged_in(), msg!(SignInFirst));
         if Utc::now().timestamp() >= self.expires {
-            self.refresh().await?;
+            self.renew().await?;
         }
         Ok(())
     }
     pub async fn logout(&mut self) -> Result<()> {
-        self.user = Value::Null;
-        self.oauth = Value::Null;
+        let refresh = std::mem::take(&mut self.refresh);
+        self.access.clear();
+        self.claims = Value::Null;
         self.expires = 0;
-        let email = std::mem::take(&mut self.email);
+        if !refresh.is_empty() {
+            // Best effort: the local sign-out must work offline too.
+            let _ = self
+                .client
+                .post(format!("{AUTH}/revoke"))
+                .form(&[
+                    ("client_id", CLIENT_ID),
+                    ("token", refresh.as_str()),
+                    ("token_type_hint", "refresh_token"),
+                ])
+                .timeout(Duration::from_secs(5))
+                .send()
+                .await;
+        }
         if std::mem::take(&mut self.remember) {
-            tokio::task::spawn_blocking(move || keyring::clear(&email)).await??;
+            tokio::task::spawn_blocking(|| keyring::clear(KEYRING_ACCOUNT)).await??;
         }
         Ok(())
-    }
-    fn url(&self, segments: &[&str]) -> Result<Url> {
-        let endpoint = *segments.first().context(msg!(EndpointMissing))?;
-        let subdomain = if ["auth", "log", "realms2"].contains(&endpoint) {
-            "app-server"
-        } else {
-            self.user["endpointSubdomains"][endpoint]
-                .as_str()
-                .context(msg!(ServiceDisabled))?
-        };
-        ensure!(
-            !subdomain.is_empty()
-                && subdomain
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b == b'-'),
-            msg!(InvalidServerName)
-        );
-        let scheme = if self.legacy_http { "http" } else { "https" };
-        let mut url = Url::parse(&format!("{scheme}://{subdomain}.tradeskillmaster.com/v2/"))?;
-        {
-            let mut path = url
-                .path_segments_mut()
-                .map_err(|_| anyhow::anyhow!(msg!(InvalidApiUrl)))?;
-            path.pop_if_empty();
-            for segment in segments {
-                path.push(segment);
-            }
-        }
-        Ok(url)
-    }
-    fn envelope(
-        &self,
-        segments: &[&str],
-        body: Option<Body>,
-        channel: Option<&str>,
-        tsm_version: Option<&str>,
-        time: i64,
-    ) -> Result<reqwest::RequestBuilder> {
-        let url = self.url(segments)?;
-        let mut query = vec![
-            (
-                "session",
-                self.user["session"].as_str().unwrap_or("").to_owned(),
-            ),
-            ("version", PROTOCOL_VERSION.to_string()),
-            ("time", time.to_string()),
-            ("token", signature(time)),
-        ];
-        if let Some(channel) = channel {
-            query.push(("channel", channel.into()));
-        }
-        if let Some(version) = tsm_version {
-            query.push(("tsm_version", version.into()));
-        }
-        let mut request = if body.is_some() {
-            self.client.post(url)
-        } else {
-            self.client.get(url)
-        };
-        if let Some(body) = body {
-            let (bytes, content_type, gzip) = match body {
-                Body::Binary(b) => (b, "application/octet-stream", false),
-                Body::Json(v) => (serde_json::to_vec(&v)?, "application/json", true),
-                Body::Text(s) => (s.into_bytes(), "text/plain", true),
-                Body::GzippedJsonBinary(v) => {
-                    (serde_json::to_vec(&v)?, "application/octet-stream", true)
-                }
-            };
-            request = request.header("Content-Type", content_type);
-            if gzip {
-                let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-                encoder.write_all(&bytes)?;
-                request = request
-                    .header("Content-Encoding", "gzip")
-                    .body(encoder.finish()?);
-            } else {
-                request = request.body(bytes);
-            }
-        }
-        Ok(request.query(&query))
-    }
-    async fn request(
-        &self,
-        segments: &[&str],
-        body: Option<Body>,
-        channel: Option<&str>,
-        tsm_version: Option<&str>,
-    ) -> Result<reqwest::Response> {
-        let response = self
-            .envelope(segments, body, channel, tsm_version, Utc::now().timestamp())?
-            .send()
-            .await
-            .map_err(|e| transport_error("TSM-App-API", e))?;
-        if matches!(response.status().as_u16(), 401 | 403) {
-            bail!(msg!(SessionRejected));
-        }
-        response
-            .error_for_status()
-            .map_err(|e| e.without_url())
-            .context(msg!(HttpError))
     }
     async fn bytes_limited(&self, mut response: reqwest::Response) -> Result<Vec<u8>> {
         ensure!(
@@ -396,88 +455,132 @@ impl Api {
             &self.bytes_limited(response).await?,
         )?)
     }
-    pub async fn get(&self, segments: &[&str]) -> Result<Value> {
-        self.json(segments, None, None, None).await
-    }
-    pub async fn post(&self, segments: &[&str], body: Body) -> Result<Value> {
-        self.json(segments, Some(body), None, None).await
-    }
-    /// Account, realm and addon status for the update channel and installed TSM version.
-    pub async fn status(&self, channel: &str, tsm_version: Option<&str>) -> Result<Value> {
-        self.json(&["status"], None, Some(channel), tsm_version)
+    async fn json(&self, method: Method, url: &str, body: Option<Value>) -> Result<Value> {
+        let mut request = self.client.request(method, url).bearer_auth(&self.access);
+        if let Some(body) = body {
+            request = request.json(&body);
+        }
+        let response = request
+            .send()
             .await
-    }
-    async fn json(
-        &self,
-        segments: &[&str],
-        body: Option<Body>,
-        channel: Option<&str>,
-        tsm_version: Option<&str>,
-    ) -> Result<Value> {
-        let response = self.request(segments, body, channel, tsm_version).await?;
-        let value = self.read_json(response).await?;
-        if value["success"].as_bool() == Some(true) {
-            return Ok(value);
+            .map_err(|e| transport_error("TSM-API", e))?;
+        let status = response.status();
+        if status.is_success() {
+            let bytes = self.bytes_limited(response).await?;
+            return Ok(if bytes.is_empty() {
+                Value::Null
+            } else {
+                serde_json::from_slice(&bytes)?
+            });
         }
-        // The official client shows the server's `error` text. Cap it since it is remote input.
-        match value["error"]
-            .as_str()
-            .map(str::trim)
-            .filter(|e| !e.is_empty())
-        {
-            Some(reason) => bail!(msg!(
-                ServiceError,
-                reason = reason.chars().take(200).collect::<String>()
-            )),
-            None => bail!(msg!(InvalidResponse)),
+        if status.as_u16() == 401 {
+            bail!(msg!(SessionRejected));
+        }
+        // The server explains refusals such as the subscription limit. Cap it: it is remote input.
+        let reason = self.read_json(response).await.ok().and_then(|v| {
+            v["message"]
+                .as_str()
+                .map(|m| m.chars().take(200).collect::<String>())
+        });
+        match reason {
+            Some(reason) => bail!(msg!(ServiceError, reason = reason)),
+            None if status.as_u16() == 403 => bail!(msg!(SessionRejected)),
+            None => bail!(msg!(HttpError)),
         }
     }
-    pub async fn binary(&self, segments: &[&str], channel: Option<&str>) -> Result<Vec<u8>> {
-        let response = self.request(segments, None, channel, None).await?;
-        let content_type = response
-            .headers()
-            .get("Content-Type")
-            .and_then(|s| s.to_str().ok())
-            .unwrap_or("");
-        ensure!(
-            content_type.contains("application/zip")
-                || content_type.contains("application/octet-stream"),
-            msg!(MissingArchive)
-        );
-        self.bytes_limited(response).await
+    pub async fn get(&self, url: &str) -> Result<Value> {
+        self.json(Method::GET, url, None).await
     }
-    fn download_url(&self, url: &str) -> Result<Url> {
-        let mut url = Url::parse(url)?;
-        if url.scheme() == "http" && !self.legacy_http {
-            url.set_scheme("https")
-                .map_err(|_| anyhow::anyhow!(msg!(InvalidUrlScheme)))?;
+    pub async fn post(&self, url: &str, body: Value) -> Result<Value> {
+        self.json(Method::POST, url, Some(body)).await
+    }
+    pub async fn delete(&self, url: &str) -> Result<Value> {
+        self.json(Method::DELETE, url, None).await
+    }
+    /// Connects to the price socket, collects what it pushes and disconnects again.
+    pub async fn feed(&self) -> Result<Feed> {
+        tokio::time::timeout(Duration::from_secs(20), self.poll_feed())
+            .await
+            .map_err(|_| anyhow::anyhow!(msg!(TransportTimeout)))?
+    }
+    async fn socket(&self, request: reqwest::RequestBuilder) -> Result<String> {
+        // The socket wants the raw token, without "Bearer ".
+        let response = request
+            .header(header::AUTHORIZATION, &self.access)
+            .send()
+            .await
+            .map_err(|e| transport_error("TSM-Socket", e))?;
+        if matches!(response.status().as_u16(), 401 | 403) {
+            bail!(msg!(SessionRejected));
         }
-        ensure!(
-            (url.scheme() == "https" || (self.legacy_http && url.scheme() == "http"))
-                && url.username().is_empty()
-                && url.password().is_none()
-                && url.port().is_none(),
-            msg!(InvalidDownloadUrl)
-        );
-        let host = url.host_str().context(msg!(MissingDownloadHost))?;
-        ensure!(
-            host == PRICE_CDN_HOST
-                || host == "tradeskillmaster.com"
-                || host.ends_with(".tradeskillmaster.com"),
-            msg!(DownloadHostRejected, host = host)
-        );
-        Ok(url)
+        let response = response.error_for_status().map_err(|e| e.without_url())?;
+        Ok(String::from_utf8(self.bytes_limited(response).await?)?)
     }
-    pub async fn download(&self, url: &str) -> Result<String> {
+    async fn poll_feed(&self) -> Result<Feed> {
+        let url = |sid: &str| format!("{SOCKET}?EIO=4&transport=polling{sid}");
+        let open = self.socket(self.client.get(url(""))).await?;
+        let open: Value = serde_json::from_str(
+            open.split('\x1e')
+                .next()
+                .and_then(|p| p.strip_prefix('0'))
+                .context(msg!(InvalidResponse))?,
+        )?;
+        let sid = open["sid"].as_str().context(msg!(InvalidResponse))?;
+        ensure!(
+            sid.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'),
+            msg!(InvalidResponse)
+        );
+        let url = url(&format!("&sid={sid}"));
+        let send = |packet: &'static str| {
+            self.socket(
+                self.client
+                    .post(&url)
+                    .header(header::CONTENT_TYPE, "text/plain;charset=UTF-8")
+                    .body(packet),
+            )
+        };
+        // Socket.IO connect to the default namespace.
+        send("40").await?;
+        let mut feed = Feed::default();
+        while !feed.complete() {
+            for packet in packets(&self.socket(self.client.get(&url)).await?) {
+                match packet {
+                    Packet::Event(name, payload) => feed.absorb(&name, payload),
+                    Packet::Ping => {
+                        send("3").await?;
+                    }
+                    Packet::Refused => bail!(msg!(SessionRejected)),
+                }
+            }
+        }
+        Ok(feed)
+    }
+    /// Raw body of a presigned or CDN URL, without credentials.
+    pub async fn fetch(&self, url: &str) -> Result<Vec<u8>> {
         let response = self
             .client
-            .get(self.download_url(url)?)
+            .get(checked_url(url)?)
             .send()
             .await
             .map_err(|e| transport_error("TSM-Download", e))?
             .error_for_status()
             .map_err(|e| e.without_url())?;
-        let bytes = self.bytes_limited(response).await?;
+        self.bytes_limited(response).await
+    }
+    pub async fn upload(&self, url: &str, bytes: Vec<u8>) -> Result<()> {
+        self.client
+            .put(checked_url(url)?)
+            .body(bytes)
+            .send()
+            .await
+            .map_err(|e| transport_error("TSM-Upload", e))?
+            .error_for_status()
+            .map_err(|e| e.without_url())?;
+        Ok(())
+    }
+    pub async fn download(&self, url: &str) -> Result<String> {
+        let bytes = self.fetch(url).await?;
         let text = if bytes.starts_with(&[0x1f, 0x8b]) {
             let mut decoded = Vec::new();
             GzDecoder::new(bytes.as_slice())
@@ -493,17 +596,6 @@ impl Api {
             msg!(InvalidPriceData)
         );
         Ok(text.trim().to_owned())
-    }
-    pub async fn upload_newer(&self, segments: &[&str], time: i64, body: Body) -> Result<bool> {
-        let status = self.get(segments).await?;
-        let last = status["lastUpload"]
-            .as_i64()
-            .context(msg!(MissingUploadTime))?;
-        if time <= last {
-            return Ok(false);
-        }
-        self.post(segments, body).await?;
-        Ok(true)
     }
 }
 #[cfg(test)]
@@ -540,173 +632,82 @@ mod tests {
             assert!(!displayed.contains(secret), "leaked {secret}");
         }
     }
-    #[test]
-    fn protocol_paths_and_signatures() {
-        assert_eq!(encoded("Realm ü"), "UmVhbG0gw7w=");
-        assert_eq!(
-            signature(1700000000),
-            "ea86bf52b7be5e219b7985e645db45e01db8cbd6139e330fb107842d2528442f"
-        );
-        let mut api = Api::new(false).unwrap();
-        api.user = json!({"endpointSubdomains":{"backup":"evil.example"}});
-        assert!(api.url(&["backup"]).is_err());
-        assert_eq!(
-            api.url(&["realms2", "add", "retail", "42"]).unwrap().path(),
-            "/v2/realms2/add/retail/42"
-        );
-    }
 }
 
 #[cfg(test)]
 mod fixtures {
     use super::*;
+    use serde_json::json;
     #[test]
-    fn price_cdn_is_allowed_without_opening_other_xyz_hosts_or_leaking_signed_urls() {
-        let fixture: Value =
-            serde_json::from_str(include_str!("../../tests/fixtures/protocol.json")).unwrap();
-        let origin = Url::parse(fixture["cdnPriceUrl"].as_str().unwrap()).unwrap();
-        for legacy_http in [false, true] {
-            let api = Api::new(legacy_http).unwrap();
-            let mut expected = origin.clone();
-            if !legacy_http {
-                expected.set_scheme("https").unwrap();
-            }
-            assert_eq!(api.download_url(origin.as_str()).unwrap(), expected);
-            for host in [
-                "app-cdn.tradeskillmaster.xyz.evil.example",
-                "other.tradeskillmaster.xyz",
-                "tradeskillmaster.xyz",
-                "evil-app-cdn.tradeskillmaster.xyz",
-            ] {
-                let mut untrusted = origin.clone();
-                untrusted.set_host(Some(host)).unwrap();
-                let error = api
-                    .download_url(untrusted.as_str())
-                    .unwrap_err()
-                    .to_string();
-                assert!(error.contains(host));
-                assert!(!error.contains("signature"));
-                assert!(!error.contains("fixture-only"));
-                assert!(!error.contains("fixture_gzip"));
-            }
-        }
-    }
-    #[test]
-    fn legacy_http_is_explicit_and_oauth_stays_on_https() {
-        let fixture: Value =
-            serde_json::from_str(include_str!("../../tests/fixtures/protocol.json")).unwrap();
-        for legacy_http in [false, true] {
-            let mut api = Api::new(legacy_http).unwrap();
-            api.user = json!({"endpointSubdomains":{"backup":"app-backup"}});
-            let request = api
-                .envelope(
-                    &["auth"],
-                    Some(Body::Json(fixture["authBody"].clone())),
-                    None,
-                    None,
-                    fixture["time"].as_i64().unwrap(),
-                )
-                .unwrap()
-                .build()
-                .unwrap();
-            let expected_scheme = if legacy_http { "http" } else { "https" };
-            let mut actual = request.url().clone();
-            actual.set_query(None);
-            let mut expected = Url::parse(fixture["legacyApiUrl"].as_str().unwrap()).unwrap();
-            expected.set_scheme(expected_scheme).unwrap();
-            assert_eq!(actual, expected);
-            assert_eq!(api.url(&["backup"]).unwrap().scheme(), expected_scheme);
-            for form in [
-                vec![("grant_type", "password"), ("password", "fixture-password")],
-                vec![
-                    ("grant_type", "refresh_token"),
-                    ("refresh_token", "fixture-refresh"),
-                ],
-            ] {
-                let request = api.token_request(&form).build().unwrap();
-                assert_eq!(
-                    request.url().as_str(),
-                    fixture["oauthUrl"].as_str().unwrap()
-                );
-                assert_eq!(request.method(), reqwest::Method::POST);
-            }
-            assert_eq!(
-                api.download_url("http://data.tradeskillmaster.com/data.txt")
-                    .unwrap()
-                    .scheme(),
-                expected_scheme
-            );
-            // A server-provided HTTPS URL never gets downgraded, including in legacy mode.
-            assert_eq!(
-                api.download_url("https://data.tradeskillmaster.com/data.txt")
-                    .unwrap()
-                    .scheme(),
-                "https"
-            );
-            for url in [
-                "http://tradeskillmaster.com.evil.example/data.txt",
-                "https://evil.example/data.txt",
-                "http://user:secret@data.tradeskillmaster.com/data.txt",
-                "http://data.tradeskillmaster.com:8080/data.txt",
-                "https://data.tradeskillmaster.com:80/data.txt",
-                "ftp://data.tradeskillmaster.com/data.txt",
-            ] {
-                assert!(api.download_url(url).is_err(), "accepted {url}");
-            }
-        }
-    }
-    #[test]
-    fn signed_gzip_and_binary_envelopes_match_legacy_fixture() {
-        let fixture: Value =
-            serde_json::from_str(include_str!("../../tests/fixtures/protocol.json")).unwrap();
-        let api = Api::new(false).unwrap();
-        let request = api
-            .envelope(
-                &["auth"],
-                Some(Body::Json(fixture["authBody"].clone())),
-                Some("release"),
-                Some("4.14.2"),
-                fixture["time"].as_i64().unwrap(),
-            )
-            .unwrap()
-            .build()
-            .unwrap();
-        assert_eq!(request.url().scheme(), "https");
-        assert_eq!(request.method(), reqwest::Method::POST);
-        assert_eq!(request.url().path(), "/v2/auth");
-        let query: std::collections::BTreeMap<_, _> = request.url().query_pairs().collect();
-        assert_eq!(query["version"], fixture["version"].to_string());
-        assert_eq!(query["token"], fixture["signature"].as_str().unwrap());
-        assert_eq!(query["session"], "");
-        assert_eq!(query["channel"], "release");
-        assert_eq!(query["tsm_version"], "4.14.2");
-        assert_eq!(request.headers()["content-encoding"], "gzip");
-        assert_eq!(request.headers()["content-type"], "application/json");
-        let body = request.body().unwrap().as_bytes().unwrap();
-        let json: Value = serde_json::from_reader(GzDecoder::new(body)).unwrap();
-        assert_eq!(json, fixture["authBody"]);
-        let request = api
-            .envelope(&["auth"], Some(Body::Binary(vec![1, 2, 3])), None, None, 1)
-            .unwrap()
-            .build()
-            .unwrap();
-        assert!(!request.headers().contains_key("content-encoding"));
-        assert_eq!(request.body().unwrap().as_bytes().unwrap(), [1, 2, 3]);
-        let request = api
-            .envelope(
-                &["auth"],
-                Some(Body::GzippedJsonBinary(json!({"tsmDB":{}}))),
-                None,
-                None,
-                1,
-            )
-            .unwrap()
-            .build()
-            .unwrap();
-        assert_eq!(request.headers()["content-encoding"], "gzip");
+    fn engine_io_packets_are_split_decoded_and_pings_noticed() {
+        let body = include_str!("../../tests/fixtures/socket-poll.txt");
+        let found = packets(body);
+        assert_eq!(found[0], Packet::Ping);
+        assert_eq!(found.len(), 6);
         assert_eq!(
-            request.headers()["content-type"],
-            "application/octet-stream"
+            packets("2\x1e42[\"app_info\",{\"news\":[]}]\x1e40\x1e44{}").len(),
+            3
         );
+        assert_eq!(
+            packets("42[\"addon\",{\"isComplete\":true}]"),
+            vec![Packet::Event("addon".into(), json!({"isComplete":true}))]
+        );
+        assert!(packets("42not json\x1e42[\"x\"]\x1e0{}").is_empty());
+        let mut feed = Feed::default();
+        for packet in found {
+            if let Packet::Event(name, payload) = packet {
+                assert!(!feed.complete());
+                feed.absorb(&name, payload);
+            }
+        }
+        assert!(feed.complete());
+        assert_eq!(feed.realms.len(), 2);
+        assert_eq!(feed.regions.len(), 1);
+        assert_eq!(feed.addons.len(), 2);
+        assert_eq!(feed.app_info["news"][0]["timestamp"], 1793577133);
+    }
+    #[test]
+    fn claims_give_user_premium_and_channels() {
+        let fixture = include_str!("../../tests/fixtures/claims.json");
+        let token = format!("e30.{}.sig", URL_SAFE_NO_PAD.encode(fixture));
+        let mut api = Api::new().unwrap();
+        api.claims = claims(&token).unwrap();
+        assert_eq!(
+            api.user_id().unwrap(),
+            "00000000-0000-4000-8000-000000000000"
+        );
+        assert!(!api.premium());
+        assert_eq!(api.channels(), vec!["release"]);
+        api.claims["realm_access"]["roles"] = json!(["premium-gold"]);
+        api.claims["resource_access"]["app-addon-version"]["roles"] =
+            json!(["channel/release", "channel/beta"]);
+        assert!(api.premium());
+        assert_eq!(api.channels(), vec!["release", "beta"]);
+        assert!(claims("no-dots").is_err());
+    }
+    #[test]
+    fn downloads_are_limited_to_https_spaces_and_tsm_hosts_without_leaking_signed_urls() {
+        for url in [
+            "https://tradeskillmaster.nyc3.digitaloceanspaces.com/pricing/a.txt?X-Amz-Signature=fixture-only",
+            "https://tradeskillmaster.nyc3.cdn.digitaloceanspaces.com/addon-versions/a.zip",
+            "https://data.tradeskillmaster.com/a.txt",
+        ] {
+            assert!(checked_url(url).is_ok(), "{url}");
+        }
+        for url in [
+            "http://tradeskillmaster.nyc3.digitaloceanspaces.com/a.txt",
+            "https://evildigitaloceanspaces.com/a.txt?X-Amz-Signature=fixture-only",
+            "https://digitaloceanspaces.com.evil.example/a.txt?X-Amz-Signature=fixture-only",
+            "https://app-cdn.tradeskillmaster.xyz/a.txt",
+            "https://user:pw@a.digitaloceanspaces.com/a.txt",
+            "https://a.digitaloceanspaces.com:8443/a.txt",
+        ] {
+            let error = checked_url(url)
+                .err()
+                .map(|e| e.to_string())
+                .unwrap_or_default();
+            assert!(!error.is_empty(), "accepted {url}");
+            assert!(!error.contains("fixture-only"));
+        }
     }
 }

@@ -43,7 +43,7 @@ The official TradeSkillMaster desktop application only ships for Windows and mac
 | 🌐 **English & German** | Switch instantly, no restart. Numbers and dates follow the language. |
 | 🎮 **All game versions** | Retail (Midnight), MoP Classic (Progression), Classic Era and TBC Anniversary. WoW: Forever is detected and ready for when TSM supports it. |
 
-**Safe by design:** passwords are never stored (optional refresh token goes to your Secret Service keyring), every file write is atomic, archives are validated before anything is touched, Lua is parsed but never executed, and data sharing with TSM is **off by default**.
+**Safe by design:** passwords are never seen (sign-in happens in your browser, the optional refresh token goes to your Secret Service keyring), every file write is atomic, archives are validated before anything is touched, Lua is parsed but never executed, and data sharing with TSM is **off by default**.
 
 ## Screenshots
 
@@ -164,12 +164,9 @@ On Hyprland and other wlroots compositors, your bar needs a StatusNotifierItem t
 ## Usage
 
 1. **Settings:** pick or auto-detect your *World of Warcraft* folder and save.
-2. **TSM account:** sign in with your TSM e-mail and password. Enable *Remember sign-in* to store a refresh token in your keyring.
-3. **Realms:** add the realms you play on. Classic and Anniversary realms are picked up from your local addon data.
+2. **TSM account:** sign in with TSM in your browser. Enable *Remember sign-in* to store a refresh token in your keyring.
+3. **Realms:** add the realms you play on.
 4. Press **Sync now** (or <kbd>F5</kbd>). From now on, sync runs every 10 minutes, also from the tray.
-
-> [!WARNING]
-> TSM's API server currently presents an invalid TLS certificate, so the session exchange only works with **Use legacy HTTP** enabled at sign-in. In that mode your session token, synced data and cloud backups travel **unencrypted**, exactly like with the official client. Your password and refresh token always use verified HTTPS. Details in [docs/protocol.md](docs/protocol.md#transport).
 
 ### Window and tray
 
@@ -215,7 +212,7 @@ Restore and addon installation require WoW to be closed. Tradewind never imports
 
 ## Project status
 
-Tradewind is **beta**. Local workflows and all reconstructed data formats are covered by tests. Sign-in (legacy HTTP), realm and status queries and price data sync are confirmed against the live service.
+Tradewind is **beta**. Local workflows and all reconstructed data formats are covered by tests. The new API port (browser sign-in, realm and price sync, cloud backups) is not yet verified end to end against the live service; accounting and log upload are not ported.
 
 - [x] Sign-in, realm management, price data sync
 - [x] Auction house browser, local backups, accounting exports
